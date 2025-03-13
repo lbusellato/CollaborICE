@@ -15,8 +15,8 @@ from jaka_interface.pose_conversions import leap_to_jaka
 from rclpy.node import Node
 from rclpy.executors import SingleThreadedExecutor
 from geometry_msgs.msg import Pose
-
 from scipy.spatial.transform import Rotation as R, Slerp
+from tf_transformations import euler_from_quaternion, quaternion_from_euler
 
 class JAKA(Node):
     def __init__(self):
@@ -46,24 +46,28 @@ class JAKA(Node):
         self.obstacle_pos_sub = self.create_subscription(String, '/sensors/leap/json', self.obstacle_callback, 1)
         self.obstacle_pos = None
 
+        self.path_function = self.triangle_wave
+
         # Go to the starting position
         self.jaka_interface.robot.disable_servo_mode()
-        #self.jaka_interface.robot.linear_move([-400, 300, 300, -np.pi, 0, 0], MoveMode.ABSOLUTE, 200, True)
+        self.jaka_interface.robot.linear_move([-400, 300, 300, -np.pi, 0, -20*np.pi/180], MoveMode.ABSOLUTE, 100, True)
         self.jaka_interface.robot.enable_servo_mode()
 
-        self.path_function = self.linear_move
-
-        self.P1_approach = [-337, 150,  343,  180, 0, 160]
-        #self.P1_approach = [-150, -467,  25,  180, 0, 160]
 
     def control_loop(self):
-        tcp = self.jaka_interface.robot.tcp_position    
-        q_out = self.path_function(tcp, self.P1_approach)
-        #if self.obstacle_pos is not None:
-        #    u_safe = self.safe_controller(joint_pos, self.obstacle_pos, self.dt)
-        #    u_out = np.array(self.jaka_interface.robot.joint_position) + u_safe * self.dt
-        #else:
-        #    u_out = joint_pos
+        q = np.array(self.jaka_interface.robot.joint_position)
+        tcp = np.array(self.jaka_interface.robot.tcp_position)
+        q_des = np.array(self.path_function(self.t))
+
+        qd_des = (q_des - q) / self.dt
+        
+        if self.obstacle_pos is not None:
+            qd_safe = self.safe_controller(qd_des, tcp[:3], self.obstacle_pos)
+        else:
+            qd_safe = qd_des
+        
+        q_out = np.array(self.jaka_interface.robot.joint_position) + qd_safe * self.dt
+
         self.jaka_interface.robot.servo_j(q_out, MoveMode.ABSOLUTE)
         self.t += self.dt
     
@@ -73,12 +77,7 @@ class JAKA(Node):
     #                                       #
     #########################################
 
-    def safe_controller(self, tcp, q_des, obstacle, dt, min_distance: int=100):
-        q = np.array(self.jaka_interface.robot.joint_position)
-
-        q_des = np.array(q_des)
-
-        qd_des = (q_des - q) / dt
+    def safe_controller(self, qd_des, tcp, obstacle, min_distance: int=100):
 
         qd_opt = cp.Variable(len(qd_des))
 
@@ -114,12 +113,11 @@ class JAKA(Node):
             raise RuntimeError('solve QP failed')
         qd_optimal = qd_opt.value
 
-        alpha = 0.25  # Smoothing factor (0 < alpha <= 1), adjust as needed
+        alpha = 0.2  # Smoothing factor (0 < alpha <= 1), adjust as needed
         qd_smoothed = alpha * qd_optimal + (1 - alpha) * self.qd_prev
         self.qd_prev = qd_smoothed 
 
         return qd_smoothed
-
     
     #########################################
     #                                       #
@@ -127,54 +125,28 @@ class JAKA(Node):
     #                                       #
     #########################################
 
-    def linear_move(self, tcp_curr: list, tcp_target: list, max_lin_vel: float=2000.0, max_ang_vel: float=10):
+    def linear(self, current_pos, target_tcp, max_step_speed):
         
-        pos_curr = np.array(tcp_curr[:3])
-        pos_target = np.array(tcp_target[:3])
-        error_linear = pos_target - pos_curr
-        norm_linear = np.linalg.norm(error_linear)
-        max_linear_step = max_lin_vel * self.dt
-
-        if norm_linear > max_linear_step:
-            delta_linear = error_linear * (max_linear_step / norm_linear)
+        target_pos = np.array(target_tcp)
+        
+        delta = target_pos - current_pos
+        distance = np.linalg.norm(delta)
+        
+        if distance <= max_step_speed:
+            next_pos = target_pos
         else:
-            delta_linear = error_linear
-
-        pos_next = (pos_curr + delta_linear) / 1000
-
-        rot_current = R.from_euler('xyz', tcp_curr[3:], degrees=False)
-        rot_target = R.from_euler('xyz', tcp_target[3:], degrees=False)
-
-        # Compute the relative rotation and its magnitude (angular difference)
-        relative_rot = rot_current.inv() * rot_target
-        relative_angle = relative_rot.magnitude()  # in radians
-        self.loginfo(relative_angle)
-        max_angular_step = max_ang_vel * self.dt
-
-        # Compute the interpolation fraction
-        if relative_angle > 0:
-            fraction = min(1, max_angular_step / relative_angle)
-        else:
-            fraction = 1.0
-
-        # Set up the SLERP interpolator over key times 0 and 1.
-        key_times = [0, 1]
-        key_rots = R.from_quat([rot_current.as_quat(), rot_target.as_quat()])
-        slerp = Slerp(key_times, key_rots)
-        rot_next = slerp([fraction])[0]  # Get the rotation at the computed fraction
-        rpy_next = rot_next.as_euler('xyz', degrees=False)
-
-        tcp_next = np.concatenate([pos_next, rpy_next])
-
-        q_out = self.jaka_interface.robot.kine_inverse(None, tcp_next)
-
-        return q_out    
-
+            next_pos = current_pos + (delta / distance) * max_step_speed
+        
+        tcp_pose = list(next_pos / 1000) + [np.pi, 0.0, -20*np.pi/180]
+        
+        next_joint_positions = self.jaka_interface.robot.kine_inverse(None, tcp_pose)
+        
+        return next_joint_positions
 
     def triangle_wave(self, tau: float, 
                       t0: float=0.0, 
                       center: list=[-400.0, 0.0, 300.0], 
-                      orientation: list=[np.pi, 0.0, 0.0],
+                      orientation: list=[np.pi, 0.0, -20*np.pi/180],
                       amplitude: float=300.0, 
                       frequency: float=0.1)->tuple:
         """Computes the nominal end-effector trajectory, both in Cartesian and joint space, for a fixed orientation triangle
@@ -271,6 +243,7 @@ def main():
     rclpy.init()
     node = JAKA()
     if node.publish_robot_state:
+        # If we are visualizing, spin the interface node in a separate thread
         interface = node.jaka_interface
         interface_thread = threading.Thread(target=spin_node, args=[interface, ], daemon=True)
         interface_thread.start()

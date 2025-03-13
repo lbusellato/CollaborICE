@@ -1241,7 +1241,6 @@ class RealRobot(BaseRobot):
             ret = self.chain.ik_LM(jaka_to_se3(cartesian_pose), q0=ref_pos)
             return ((JAKA_ERR_CODES.ERR_KINE_INVERSE_ERR.value,) if not ret[1] else (JAKA_ERR_CODES.SUCCESS_CODE.value, ret[0]))
 
-    @untested
     def _kine_forward(self, joint_pos: list)->list:
         """Compute forward kinematics.
 
@@ -1258,7 +1257,7 @@ class RealRobot(BaseRobot):
         if self.use_jaka_kinematics:
             return self.robot.kine_forward(joint_pos)
         else:
-            return (JAKA_ERR_CODES.SUCCESS_CODE, self.chain.fkine(joint_pos))
+            return (JAKA_ERR_CODES.SUCCESS_CODE.value, self.chain.fkine(joint_pos))
    
     def jacobian(self, joint_position: list=None)->np.ndarray:
         """Compute the robot's Jacobian matrix at the given (or current if None) joint position.
