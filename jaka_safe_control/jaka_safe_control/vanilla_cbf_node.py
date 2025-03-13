@@ -2,21 +2,18 @@ import rclpy
 import rclpy.logging
 import numpy as np
 import cvxpy as cp
-import scipy.spatial.transform as transform
 import json
 import threading
 import time
 
 from std_msgs.msg import String
-from jaka_messages.srv import TargetReached
 from jaka_interface.interface import JakaInterface
 from jaka_interface.data_types import MoveMode
 from jaka_interface.pose_conversions import leap_to_jaka
 from rclpy.node import Node
 from rclpy.executors import SingleThreadedExecutor
-from geometry_msgs.msg import Pose
 from scipy.spatial.transform import Rotation as R, Slerp
-from tf_transformations import euler_from_quaternion, quaternion_from_euler
+from tf_transformations import quaternion_from_euler
 
 class JAKA(Node):
     def __init__(self):
@@ -46,30 +43,90 @@ class JAKA(Node):
         self.obstacle_pos_sub = self.create_subscription(String, '/sensors/leap/json', self.obstacle_callback, 1)
         self.obstacle_pos = None
 
-        self.path_function = self.triangle_wave
-
+        # Pick locations
+        self.P1_approach = np.array([-150, -467,  25, -np.pi, 0, -20*np.pi/180])
+        self.P1_pick     = np.array([-150, -467,  -25, -np.pi, 0, -20*np.pi/180])
+        self.P2_approach = np.array([-212, -407,  25, -np.pi, 0, -20*np.pi/180])
+        self.P2_pick     = np.array([-212, -407,  -25, -np.pi, 0, -20*np.pi/180])
+        self.P3_approach = np.array([-273, -467,  25, -np.pi, 0, -20*np.pi/180])
+        self.P3_pick     = np.array([-273, -467,  -25, -np.pi, 0, -20*np.pi/180])
+        # Place locations
+        self.B1_approach = np.array([-180,  261, 100, -np.pi, 0, -20*np.pi/180])
+        self.B1_place    = np.array([-180,  261, 70, -np.pi, 0, -20*np.pi/180])
+        self.B2_approach = np.array([-285,  261,  100, -np.pi, 0, -20*np.pi/180])
+        self.B2_place    = np.array([-285,  261, 70, -np.pi, 0, -20*np.pi/180])
+        self.B3_approach = np.array([-390,  261,  100, -np.pi, 0, -20*np.pi/180])
+        self.B3_place    = np.array([-390,  261, 70, -np.pi, 0, -20*np.pi/180])
+        
         # Go to the starting position
+        self.home = np.array([-212, -467, 300, -np.pi, 0, -20*np.pi/180])
         self.jaka_interface.robot.disable_servo_mode()
-        self.jaka_interface.robot.linear_move([-400, 300, 300, -np.pi, 0, -20*np.pi/180], MoveMode.ABSOLUTE, 100, True)
+        self.jaka_interface.robot.linear_move(self.home, MoveMode.ABSOLUTE, 200, True)
         self.jaka_interface.robot.enable_servo_mode()
 
+        # Pick and place variables
+        self.pnp_phase = 0
+        # TODO: this is super easy to read and maintain, also not repetitive at all
+        self.pnp_sequence = [self.P1_approach, 
+                             self.P1_pick, 
+                             self.P1_approach,
+                             self.home,
+                             self.B1_approach,
+                             self.B1_place,
+                             self.B1_approach,
+                             self.home,
+                             self.P2_approach, 
+                             self.P2_pick, 
+                             self.P2_approach,
+                             self.home,
+                             self.B2_approach,
+                             self.B2_place,
+                             self.B2_approach,
+                             self.home,
+                             self.P3_approach, 
+                             self.P3_pick, 
+                             self.P3_approach,
+                             self.home,
+                             self.B3_approach,
+                             self.B3_place,
+                             self.B3_approach,
+                             self.home,]
+        self.pnp_gripper_states = [0, 1, 1, 1, 1, 0, 
+                                   0, 0, 0, 1, 1, 1, 
+                                   1, 0, 0, 0, 0, 1,
+                                   1, 1, 1, 0, 0, 0]
+        self.pnp_target = self.pnp_sequence[self.pnp_phase]
+        self.jaka_interface.robot.power_on_gripper()
+        self.jaka_interface.robot.open_gripper()
+        time.sleep(2) # Wait for the gripper to change state
 
     def control_loop(self):
         q = np.array(self.jaka_interface.robot.joint_position)
         tcp = np.array(self.jaka_interface.robot.tcp_position)
-        q_des = np.array(self.path_function(self.t))
 
-        qd_des = (q_des - q) / self.dt
-        
-        if self.obstacle_pos is not None:
-            qd_safe = self.safe_controller(qd_des, tcp[:3], self.obstacle_pos)
-        else:
-            qd_safe = qd_des
-        
-        q_out = np.array(self.jaka_interface.robot.joint_position) + qd_safe * self.dt
+        if np.allclose(tcp[:3], self.pnp_target[:3]):
+            if self.pnp_phase < len(self.pnp_sequence) - 1:
+                if self.pnp_gripper_states[self.pnp_phase]:
+                    self.jaka_interface.robot.close_gripper()
+                else:
+                    self.jaka_interface.robot.open_gripper()
+                time.sleep(0.5) # Wait for the gripper to change state
+                self.pnp_phase += 1
+                self.pnp_target = self.pnp_sequence[self.pnp_phase]
 
-        self.jaka_interface.robot.servo_j(q_out, MoveMode.ABSOLUTE)
-        self.t += self.dt
+        q_des = self.compute_trajectory(tcp, self.pnp_target)
+
+        self.jaka_interface.robot.servo_j(q_des, MoveMode.ABSOLUTE)
+            
+        #q_des = self.compute_trajectory(tcp, self.P1_approach) #np.array(self.path_function(self.t))
+
+        #qd_des = (q_des - q) / self.dt
+        #
+        #if self.obstacle_pos is not None:
+        #    qd_safe = self.safe_controller(qd_des, tcp[:3], self.obstacle_pos)
+        #    q_out = q + qd_safe * self.dt
+        #else:
+        #    q_out = q_des
     
     #########################################
     #                                       #
@@ -125,23 +182,27 @@ class JAKA(Node):
     #                                       #
     #########################################
 
-    def linear(self, current_pos, target_tcp, max_step_speed):
-        
-        target_pos = np.array(target_tcp)
-        
-        delta = target_pos - current_pos
-        distance = np.linalg.norm(delta)
-        
-        if distance <= max_step_speed:
-            next_pos = target_pos
+    def compute_trajectory(self, start_pose, end_pose, max_linear_vel=100):
+
+        start_pos = start_pose[:3]
+        end_pos =   end_pose[:3]
+        start_quat = np.array(quaternion_from_euler(*start_pose[3:]))
+        end_quat = np.array(quaternion_from_euler(*end_pose[3:]))
+
+        linear_displacement = np.linalg.norm(end_pos - start_pos)
+
+        if linear_displacement < 1e-6:
+            t = 1.0
         else:
-            next_pos = current_pos + (delta / distance) * max_step_speed
-        
-        tcp_pose = list(next_pos / 1000) + [np.pi, 0.0, -20*np.pi/180]
-        
-        next_joint_positions = self.jaka_interface.robot.kine_inverse(None, tcp_pose)
-        
-        return next_joint_positions
+            # HACK
+            t = min(0.35 * max_linear_vel / linear_displacement, 1.0)
+
+
+        interp_pos = start_pos + t * (end_pos - start_pos)
+        interp_rot = Slerp([0, 1], R.from_quat([start_quat, end_quat]))([t]).as_euler('xyz')[0]
+        u_nominal = self.jaka_interface.robot.robot.kine_inverse(self.jaka_interface.robot.joint_position, tuple(interp_pos) + tuple(interp_rot))
+            
+        return u_nominal[1]
 
     def triangle_wave(self, tau: float, 
                       t0: float=0.0, 

@@ -12,7 +12,6 @@ robot = jkrc.RC("10.5.5.100")
 ret = robot.login()
 ret = robot.power_on() #power on
 ret = robot.enable_robot()
-print(robot.get_robot_status())
 
 #while True:
 #    ret = robot.get_joint_position()
