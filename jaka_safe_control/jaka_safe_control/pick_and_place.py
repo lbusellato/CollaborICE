@@ -10,6 +10,7 @@ from std_msgs.msg import String
 from jaka_interface.interface import JakaInterface
 from jaka_interface.data_types import MoveMode
 from jaka_interface.pose_conversions import leap_to_jaka
+from jaka_safe_control.path_functions import linear_move 
 from rclpy.node import Node
 from rclpy.executors import SingleThreadedExecutor
 from scipy.spatial.transform import Rotation as R, Slerp
@@ -66,7 +67,6 @@ class JAKA(Node):
 
         # Pick and place variables
         self.pnp_phase = 0
-        # TODO: this is super easy to read and maintain, also not repetitive at all
         self.pnp_sequence = [self.P1_approach, 
                              self.P1_pick, 
                              self.P1_approach,
@@ -115,19 +115,18 @@ class JAKA(Node):
                 self.pnp_target = self.pnp_sequence[self.pnp_phase]
 
         q_des = self.compute_trajectory(tcp, self.pnp_target)
-
-        self.jaka_interface.robot.servo_j(q_des, MoveMode.ABSOLUTE)
-            
-        #q_des = self.compute_trajectory(tcp, self.P1_approach) #np.array(self.path_function(self.t))
-
-        #qd_des = (q_des - q) / self.dt
-        #
-        #if self.obstacle_pos is not None:
-        #    qd_safe = self.safe_controller(qd_des, tcp[:3], self.obstacle_pos)
-        #    q_out = q + qd_safe * self.dt
-        #else:
-        #    q_out = q_des
     
+        qd_des = (q_des - q) / self.dt
+        
+        if self.obstacle_pos is not None:
+            qd_safe = self.safe_controller(qd_des, tcp[:3], self.obstacle_pos)
+            q_out = q + qd_safe * self.dt
+        else:
+            q_out = q_des
+        
+        self.jaka_interface.robot.servo_j(q_out, MoveMode.ABSOLUTE)
+    
+
     #########################################
     #                                       #
     # Control Barrier Functions             #
@@ -148,10 +147,7 @@ class JAKA(Node):
         J = self.jaka_interface.robot.jacobian()
 
         d = np.linalg.norm(tcp - obstacle)
-        
-        #if d < 0.9 * min_distance:
-        #    self.loginfo('Possible collision detected!')
-        
+                
         gamma = 0.8  
         h = d - self.hand_radius - min_distance
         n = (tcp - obstacle) / d  # Normal vector
@@ -175,78 +171,6 @@ class JAKA(Node):
         self.qd_prev = qd_smoothed 
 
         return qd_smoothed
-    
-    #########################################
-    #                                       #
-    # Path Functions                        #
-    #                                       #
-    #########################################
-
-    def compute_trajectory(self, start_pose, end_pose, max_linear_vel=100):
-
-        start_pos = start_pose[:3]
-        end_pos =   end_pose[:3]
-        start_quat = np.array(quaternion_from_euler(*start_pose[3:]))
-        end_quat = np.array(quaternion_from_euler(*end_pose[3:]))
-
-        linear_displacement = np.linalg.norm(end_pos - start_pos)
-
-        if linear_displacement < 1e-6:
-            t = 1.0
-        else:
-            # HACK
-            t = min(0.35 * max_linear_vel / linear_displacement, 1.0)
-
-
-        interp_pos = start_pos + t * (end_pos - start_pos)
-        interp_rot = Slerp([0, 1], R.from_quat([start_quat, end_quat]))([t]).as_euler('xyz')[0]
-        u_nominal = self.jaka_interface.robot.robot.kine_inverse(self.jaka_interface.robot.joint_position, tuple(interp_pos) + tuple(interp_rot))
-            
-        return u_nominal[1]
-
-    def triangle_wave(self, tau: float, 
-                      t0: float=0.0, 
-                      center: list=[-400.0, 0.0, 300.0], 
-                      orientation: list=[np.pi, 0.0, -20*np.pi/180],
-                      amplitude: float=300.0, 
-                      frequency: float=0.1)->tuple:
-        """Computes the nominal end-effector trajectory, both in Cartesian and joint space, for a fixed orientation triangle
-        wave on the y direction.
-
-        Parameters
-        ----------
-        tau : float
-            Time to compute the trajectory in.
-        t0 : float, optional
-            Start time of the trajectory, by default 0.0
-        center : list, optional
-            The coordinates in MILLIMETERS of the triangle wave's zero, by default [-400.0, 0.0, 300.0]
-        orientation : list, optional
-            The fixed orientation for the TCP, by default [np.pi, 0.0, 0.0]
-        amplitude : float, optional
-            The amplitude in MILLIMETERS of the triangle wave, by default 100.0
-        frequency : float, optional
-            The frequency in Hertz of the triangle wave, by default 0.1
-
-        Returns
-        -------
-        tuple
-            The computed TCP pose and joint positions at time tau.
-        """
-        x_c, y_c, z_c = center
-
-        period = 1.0 / frequency
-        phase = ((tau - t0) % period) / period 
-        
-        x = x_c
-        y = y_c + amplitude * (4 * np.abs(phase - 0.5) - 1) 
-        z = z_c
-
-        tcp_pose = np.array([x/1000, y/1000, z/1000, *orientation])
-
-        joint_pose = self.jaka_interface.robot.kine_inverse(None, tcp_pose)
-
-        return joint_pose
     
     #########################################
     #                                       #
