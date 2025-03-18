@@ -45,42 +45,36 @@ def linear_move(start_pose: list, end_pose: list, max_linear_vel: float=100):
     return tuple(interp_pos) + tuple(interp_rot)
 
 def triangle_wave(tau: float, 
-                t0: float=0.0, 
-                center: list=[-400.0, 0.0, 300.0], 
-                orientation: list=[np.pi, 0.0, -20*np.pi/180],
-                amplitude: float=300.0, 
-                frequency: float=0.1)->tuple:
+                t: float=0.0, 
+                x: list=[0.0]*6 )->tuple:
     """Computes the nominal end-effector trajectory for a fixed orientation triangle wave on the y direction.
 
     Parameters
     ----------
     tau : float
         Time to compute the trajectory in.
-    t0 : float, optional
+    t : float, optional
         Start time of the trajectory, by default 0.0
     center : list, optional
-        The coordinates in MILLIMETERS of the triangle wave's zero, by default [-400.0, 0.0, 300.0]
-    orientation : list, optional
-        The fixed orientation for the TCP, by default [np.pi, 0.0, 0.0]
-    amplitude : float, optional
-        The amplitude in MILLIMETERS of the triangle wave, by default 100.0
-    frequency : float, optional
-        The frequency in Hertz of the triangle wave, by default 0.1
+        The current state (unused), by default [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
     Returns
     -------
     tuple
         The computed TCP pose and joint positions at time tau.
     """
-    x_c, y_c, z_c = center
+    x_c, y_c, z_c = [-0.400, 0.0, 0.300]
+    orientation = [np.pi, 0.0, -20*np.pi/180]
+    amplitude = 0.300, 
+    frequency = 0.1
 
     period = 1.0 / frequency
-    phase = ((tau - t0) % period) / period 
+    phase = ((tau - t) % period) / period 
     
     x = x_c
     y = y_c + amplitude * (4 * np.abs(phase - 0.5) - 1) 
     z = z_c
 
-    tcp_pose = np.array([x/1000, y/1000, z/1000, *orientation])
+    tcp_pose = np.array([x, y, z, *orientation])
 
     return tcp_pose

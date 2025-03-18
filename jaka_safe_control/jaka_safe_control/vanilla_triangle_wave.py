@@ -2,11 +2,8 @@ import rclpy
 import rclpy.logging
 import numpy as np
 import cvxpy as cp
-import json
 import threading
-import time
 
-from std_msgs.msg import String
 from jaka_interface.interface import JakaInterface
 from jaka_interface.data_types import MoveMode
 from jaka_messages.msg import LeapHand
@@ -33,14 +30,13 @@ class JAKA(Node):
         self.dt = 0.008
         self.control_loop_timer = self.create_timer(self.dt, self.control_loop) 
 
-        self.min_hand_confidence = 0.33
-        self.hand_radius = 0
-        self.max_joint_velocity = 100 #0.95 * np.pi
+        self.max_joint_velocity = 100 
         self.qd_prev = np.zeros(6)
 
-        # Obstacle position
-        self.obstacle_pos_sub = self.create_subscription(LeapHand, '/jaka/control/hand', self.leap_hand_callback, 1)
-        self.obstacle_pos = None
+        # Hand position
+        self.hand_pos_sub = self.create_subscription(LeapHand, '/jaka/control/hand', self.leap_hand_callback, 1)
+        self.hand_pos = None
+        self.hand_radius = 0
         
         # Go to the starting position
         self.home = np.array([-212, -467, 300, -np.pi, 0, -20*np.pi/180])
@@ -56,13 +52,17 @@ class JAKA(Node):
             
         q_des = np.array(self.path_function(self.t))
 
-        qd_des = (q_des - q) / self.dt
+        qd = (q_des - q) / self.dt
         
-        if self.obstacle_pos is not None:
-            qd_safe = self.safe_controller(qd_des, tcp[:3], self.obstacle_pos)
-            q_out = q + qd_safe * self.dt
-        else:
-            q_out = q_des
+        if self.hand_pos is not None:
+            qd = self.safe_controller(qd, tcp[:3], self.hand_pos)
+            self.hand_pos = None # HACK to cover the case in which the hand disappears suddenly
+
+        alpha = 0.2  # Smoothing factor (0 < alpha <= 1), adjust as needed
+        qd_smoothed = alpha * qd + (1 - alpha) * self.qd_prev
+        self.qd_prev = qd_smoothed 
+
+        q_out = q + qd * self.dt
 
         self.jaka_interface.robot.servo_j(q_out, MoveMode.ABSOLUTE)
 
@@ -105,13 +105,8 @@ class JAKA(Node):
         # Get the optimized joint velocity
         if qd_opt.value is None:
             raise RuntimeError('solve QP failed')
-        qd_optimal = qd_opt.value
 
-        alpha = 0.2  # Smoothing factor (0 < alpha <= 1), adjust as needed
-        qd_smoothed = alpha * qd_optimal + (1 - alpha) * self.qd_prev
-        self.qd_prev = qd_smoothed 
-
-        return qd_smoothed
+        return qd_opt.value
     
     #########################################
     #                                       #
