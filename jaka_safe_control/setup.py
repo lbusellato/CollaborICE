@@ -23,8 +23,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'vanilla_cbf_node = jaka_safe_control.vanilla_cbf_node:main',
-            'predictive_cbf_node = jaka_safe_control.predictive_cbf_node:main'
+            'triangle_wave = jaka_safe_control.triangle_wave:main',          
+            'leap_subscriber_node = jaka_safe_control.leap_subscriber_node:main'
         ],
     },
 )

@@ -9,7 +9,7 @@ import time
 from std_msgs.msg import String
 from jaka_interface.interface import JakaInterface
 from jaka_interface.data_types import MoveMode
-from jaka_interface.pose_conversions import leap_to_jaka
+from jaka_messages.msg import LeapHand
 from jaka_safe_control.path_functions import triangle_wave 
 from rclpy.node import Node
 from rclpy.executors import SingleThreadedExecutor
@@ -17,7 +17,7 @@ from rclpy.executors import SingleThreadedExecutor
 class JAKA(Node):
     def __init__(self):
         # Init node
-        super().__init__('vanilla_cbf_node')
+        super().__init__('triangle_Wave_node')
 
         self.declare_parameter('publish_robot_state', rclpy.Parameter.Type.BOOL)
         self.publish_robot_state = self.get_parameter('publish_robot_state').value
@@ -27,7 +27,7 @@ class JAKA(Node):
         self.jaka_interface.initialize()
 
         # Logging
-        self.logger = rclpy.logging.get_logger('vanilla_cbf')
+        self.logger = rclpy.logging.get_logger('triangle_Wave_node')
 
         self.t = 0
         self.dt = 0.008
@@ -39,7 +39,7 @@ class JAKA(Node):
         self.qd_prev = np.zeros(6)
 
         # Obstacle position
-        self.obstacle_pos_sub = self.create_subscription(String, '/sensors/leap/json', self.obstacle_callback, 1)
+        self.obstacle_pos_sub = self.create_subscription(LeapHand, '/jaka/control/hand', self.leap_hand_callback, 1)
         self.obstacle_pos = None
         
         # Go to the starting position
@@ -119,37 +119,9 @@ class JAKA(Node):
     #                                       #
     #########################################
     
-    def obstacle_callback(self, msg: String):
-        data = json.loads(msg.data)
-        hands = data.get('hands')
-        if hands:
-            confidences = np.array([h.get('confidence') for h in hands])
-            hand = hands[np.argmax(confidences)]
-            if hand.get('confidence') < self.min_hand_confidence:
-                self.obstacle_pos = None
-            else:
-                hand = hands[0]
-                keypoints = hand.get('hand_keypoints')
-
-                fingers = keypoints.get("fingers", {})
-                palm_position = np.array(keypoints.get('palm_position'))
-
-                max_dist = 0     
-                # TODO: probably reduce the search space to the joints we KNOW are far away from the palm (ie just fingertips) 
-                for _, joints in fingers.items():
-                    for _, pos in joints.items():
-                        dist = np.linalg.norm(np.abs(np.array(pos['prev_joint']) - palm_position))
-                        if dist > max_dist:
-                            max_dist = dist
-                self.hand_radius = max_dist * 1000
-
-                # Convert to JAKA world
-                palm_position = leap_to_jaka(palm_position)
-                palm_position = np.array(palm_position) * 1000 # to mm
-                self.obstacle_pos = palm_position
-        else:
-            self.obstacle_pos = None
-
+    def leap_hand_callback(self, msg: LeapHand):
+        self.hand_pos = np.array([msg.x, msg.y, msg.z])
+        self.hand_radius = msg.radius        
 
     #########################################
     #                                       #

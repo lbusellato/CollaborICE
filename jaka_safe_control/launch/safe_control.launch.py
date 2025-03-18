@@ -37,6 +37,13 @@ def generate_launch_description():
             ]))
     )
 
+    # Launch the Leap subscriber node
+    leap_subscriber_node = Node(
+        package='jaka_safe_control',
+        executable='leap_subscriber_node',
+        output='screen'
+    )
+
     # Launch the JAKA Safe Control node
     jaka_safe_control_node = Node(
         package='jaka_safe_control',
@@ -77,6 +84,8 @@ def generate_launch_description():
     )
 
     return launch.LaunchDescription([
+        leap_streamer_node,
+        leap_subscriber_node,
         cbf_arch_arg,
         use_joint_gui_arg,
         visualize_leap_arg,
@@ -86,5 +95,4 @@ def generate_launch_description():
         frame_id_arg,
         publish_rate_arg,
         tracking_mode_arg,
-        leap_streamer_node
     ])

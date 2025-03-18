@@ -15,6 +15,7 @@ find_package(rosidl_default_generators REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RobotState.msg"
   "msg/Payload.msg"
+  "msg/LeapHand.msg"
   "srv/TargetReached.srv"
  )
 
