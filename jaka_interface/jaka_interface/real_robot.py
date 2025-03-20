@@ -1,7 +1,13 @@
-import jkrc
+# Make sure we have the SDK
+try:
+    import jkrc
+except Exception:
+    from jaka_interface.exceptions import SDKNotFoundException
+    raise SDKNotFoundException('Failed to import jkrc. Did you add the path to the lib folder to both PYTHONPATH and LD_LIBRARY_PATH environment variables?')
 import numpy as np
 import os
 import roboticstoolbox as rtb
+import time
 
 from ament_index_python.packages import get_package_share_directory
 from jaka_interface.base_robot import BaseRobot
@@ -16,6 +22,7 @@ class RealRobot(BaseRobot):
                  ip: str='10.5.5.100',
                  gripper_power_pin: int = 0,
                  gripper_control_pin: int = 1,
+                 gripper_timeout: float = 0.5,
                  use_jaka_kinematics: bool=False,
                  urdf_package: str='jaka_description',
                  urdf_name: str='jaka.urdf'):
@@ -25,6 +32,8 @@ class RealRobot(BaseRobot):
         # Gripper DOUT pins
         self.gripper_power_pin = gripper_power_pin
         self.gripper_control_pin = gripper_control_pin
+        # How long to wait for the gripper to open/close
+        self.gripper_timeout = gripper_timeout
 
         self.use_jaka_kinematics = use_jaka_kinematics
         if not self.use_jaka_kinematics:
@@ -272,14 +281,18 @@ class RealRobot(BaseRobot):
         return self.robot.get_motion_status()
 
     def _open_gripper(self)->None:
-        """Open the gripper by turning off the corresponding digital outputs.
+        """Open the gripper by turning off the corresponding digital outputs. This function is blocking for self.gripper_timeout seconds.
         """
-        return self.robot.set_digital_output(IOType.CABINET.value, self.gripper_control_pin, 0)
+        ret = self.robot.set_digital_output(IOType.CABINET.value, self.gripper_control_pin, 0)
+        time.sleep(self.gripper_timeout)
+        return ret
 
     def _close_gripper(self)->None:
-        """Close the gripper by turning on the control digital output.
+        """Close the gripper by turning on the control digital output. This function is blocking for self.gripper_timeout seconds.
         """
-        return self.robot.set_digital_output(IOType.CABINET.value, self.gripper_control_pin, 1)
+        ret = self.robot.set_digital_output(IOType.CABINET.value, self.gripper_control_pin, 1)
+        time.sleep(self.gripper_timeout)
+        return ret
     
     def _power_off_gripper(self)->None:
         """Remove power to the gripper.

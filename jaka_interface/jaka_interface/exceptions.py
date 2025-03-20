@@ -1,5 +1,3 @@
-import ipaddress
-
 from collections import defaultdict
 from enum import Enum
 
@@ -259,6 +257,10 @@ class ToolSetTimeoutException(JakaInterfaceException):
 
 class IOSetTimeoutException(JakaInterfaceException):
     """Raised when setting IO times out (Error code: -60)."""
+    pass
+
+class SDKNotFoundException(JakaInterfaceException):
+    """Raised when the SDK was not found."""
     pass
 
 ERROR_EXCEPTION_MAP = {

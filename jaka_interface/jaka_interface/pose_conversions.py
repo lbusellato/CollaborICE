@@ -247,4 +247,4 @@ def leap_to_jaka(leap_pose: list)->list:
         [-1,0,0]])
     t = np.array([0.400, 0, 0.025])
     position = leap_pose[:3]
-    return ((np.array(position)) @ R) - t
+    return (((np.array(position)) @ R) - t) * 1000
