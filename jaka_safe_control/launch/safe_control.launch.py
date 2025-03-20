@@ -47,7 +47,7 @@ def generate_launch_description():
     # Launch the JAKA Safe Control node
     jaka_safe_control_node = Node(
         package='jaka_safe_control',
-        executable=[LaunchConfiguration('cbf_arch'), '_cbf_node'],
+        executable=[LaunchConfiguration('cbf_arch'), '_triangle_wave'],
         output='screen',
         parameters=[{'publish_robot_state': LaunchConfiguration('use_rviz')}]
     )
@@ -84,6 +84,9 @@ def generate_launch_description():
     )
 
     return launch.LaunchDescription([
+        frame_id_arg,
+        publish_rate_arg,
+        tracking_mode_arg,
         leap_streamer_node,
         leap_subscriber_node,
         cbf_arch_arg,
@@ -92,7 +95,4 @@ def generate_launch_description():
         use_rviz_arg,
         jaka_display_launch,
         jaka_safe_control_node,
-        frame_id_arg,
-        publish_rate_arg,
-        tracking_mode_arg,
     ])

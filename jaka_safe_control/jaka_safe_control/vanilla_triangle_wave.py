@@ -14,7 +14,7 @@ from rclpy.executors import SingleThreadedExecutor
 class JAKA(Node):
     def __init__(self):
         # Init node
-        super().__init__('triangle_Wave_node')
+        super().__init__('triangle_wave_node')
 
         self.declare_parameter('publish_robot_state', rclpy.Parameter.Type.BOOL)
         self.publish_robot_state = self.get_parameter('publish_robot_state').value
@@ -24,14 +24,20 @@ class JAKA(Node):
         self.jaka_interface.initialize()
 
         # Logging
-        self.logger = rclpy.logging.get_logger('triangle_Wave_node')
+        self.logger = rclpy.logging.get_logger('triangle_wave_node')
 
         self.t = 0
         self.dt = 0.008
         self.control_loop_timer = self.create_timer(self.dt, self.control_loop) 
 
+        # CBF parameters
+        self.gamma = 0.8
+        self.min_hand_distance = 100
         self.max_joint_velocity = 100 
+
+        # Parameters for the output velocity low-pass filter
         self.qd_prev = np.zeros(6)
+        self.qd_smoothing_factor = 0.3
 
         # Hand position
         self.hand_pos_sub = self.create_subscription(LeapHand, '/jaka/control/hand', self.leap_hand_callback, 1)
@@ -39,7 +45,7 @@ class JAKA(Node):
         self.hand_radius = 0
         
         # Go to the starting position
-        self.home = np.array([-212, -467, 300, -np.pi, 0, -20*np.pi/180])
+        self.home = np.array([-400, 300, 300, -np.pi, 0, -20*np.pi/180])
         self.jaka_interface.robot.disable_servo_mode()
         self.jaka_interface.robot.linear_move(self.home, MoveMode.ABSOLUTE, 200, True)
         self.jaka_interface.robot.enable_servo_mode()
@@ -50,17 +56,16 @@ class JAKA(Node):
         q = np.array(self.jaka_interface.robot.joint_position)
         tcp = np.array(self.jaka_interface.robot.tcp_position)
             
-        q_des = np.array(self.path_function(self.t))
+        tcp_des = np.array(self.path_function(self.t))
+        q_des = self.jaka_interface.robot.kine_inverse(None, tcp_des)
 
         qd = (q_des - q) / self.dt
-        
-        if self.hand_pos is not None:
-            qd = self.safe_controller(qd, tcp[:3], self.hand_pos)
-            self.hand_pos = None # HACK to cover the case in which the hand disappears suddenly
 
-        alpha = 0.2  # Smoothing factor (0 < alpha <= 1), adjust as needed
-        qd_smoothed = alpha * qd + (1 - alpha) * self.qd_prev
-        self.qd_prev = qd_smoothed 
+        if self.hand_pos is not None:
+            qd = self.safe_controller(qd, tcp[:3])
+
+        qd = self.qd_smoothing_factor * qd + (1 - self.qd_smoothing_factor) * self.qd_prev
+        self.qd_prev = qd 
 
         q_out = q + qd * self.dt
 
@@ -74,7 +79,7 @@ class JAKA(Node):
     #                                       #
     #########################################
 
-    def safe_controller(self, qd_des, tcp, obstacle, min_distance: int=100):
+    def safe_controller(self, qd_des, tcp):
 
         qd_opt = cp.Variable(len(qd_des))
 
@@ -87,14 +92,13 @@ class JAKA(Node):
 
         J = self.jaka_interface.robot.jacobian()
 
-        d = np.linalg.norm(tcp - obstacle)
+        d = np.linalg.norm(tcp - self.hand_pos)
                 
-        gamma = 0.8  
-        h = d - self.hand_radius - min_distance
-        n = (tcp - obstacle) / d  # Normal vector
+        h = d - self.hand_radius - self.min_hand_distance
+        n = (tcp - self.hand_pos) / d  # Normal vector
         grad_h = n @ J[:3, :]  # Compute gradient
         constraints = [
-            -grad_h.reshape(1, -1) @ qd_opt <= gamma * h,
+            -grad_h.reshape(1, -1) @ qd_opt <= self.gamma * h,
             qd_opt >= -self.max_joint_velocity,
             qd_opt <= self.max_joint_velocity]
 

@@ -65,7 +65,7 @@ def triangle_wave(tau: float,
     """
     x_c, y_c, z_c = [-0.400, 0.0, 0.300]
     orientation = [np.pi, 0.0, -20*np.pi/180]
-    amplitude = 0.300, 
+    amplitude = 0.300
     frequency = 0.1
 
     period = 1.0 / frequency
