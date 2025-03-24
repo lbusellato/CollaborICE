@@ -55,16 +55,16 @@ def process_sdk_call(connected: bool=False,
             if servo_enabled and not self.state.is_in_servo_mode:
                 logger.warning(f"{context}: Servo mode must be enabled to perform this action.")
                 return None
-            if servo_disabled and self.state.is_in_servo_mode:
+            elif servo_disabled and self.state.is_in_servo_mode:
                 logger.warning(f"{context}: Servo mode must be disabled to perform this action.")
                 return None
-            if enabled and not self.state.is_enabled:
+            elif enabled and not self.state.is_enabled:
                 logger.warning(f"{context}: Robot must be enabled to perform this action.")
                 return None
-            if powered_on and not self.state.is_powered_on:
+            elif powered_on and not self.state.is_powered_on:
                 logger.warning(f"{context}: Robot must be powered on to perform this action.")
                 return None
-            if connected and not self.state.is_connected:
+            elif connected and not self.state.is_connected:
                 logger.warning(f"{context}: Robot must be connected to perform this action.")
                 return None
             
@@ -98,7 +98,7 @@ def process_sdk_call(connected: bool=False,
     return decorator
 
 def untested(func):
-    """Decorator to warn the user about untested functions with a log message.
+    """Decorator to warn the user about untested functions with a log message (only once to not hinder performance).
         
     Returns
     -------
@@ -106,14 +106,17 @@ def untested(func):
     """
     @functools.wraps(func)
     def wrapper(self, *args, **kwargs):
-        logger = rclpy.logging.get_logger(str(self))
-        context = func.__name__
-        logger.warning(f"{context} is untested, so its behaviour/safety is not guaranteed. If you confirm its functionality, please remove the @untested decorator from it and open a PR on the repo.")
-        return func(self, *args, **kwargs)
+        if not wrapper.has_run:
+            logger = rclpy.logging.get_logger(str(self))
+            context = func.__name__
+            logger.warning(f"{context} is untested, so its behaviour/safety is not guaranteed. If you confirm its functionality, please remove the @untested decorator from it and open a PR on the repo.")
+            wrapper.has_run = True
+            return func(self, *args, **kwargs)
+    wrapper.has_run = False     
     return wrapper
 
 def deprecated(func):
-    """Decorator to warn the user about deprecated functions with a log message.
+    """Decorator to warn the user about deprecated functions with a log message (only once to not hinder performance).
         
     Returns
     -------
@@ -121,7 +124,10 @@ def deprecated(func):
     """
     @functools.wraps(func)
     def wrapper(self, *args, **kwargs):
-        context = func.__name__
-        rclpy.logging.get_logger(str(self)).warning(f"{context} is deprecated after controller version 1.7.1, so it might not work in the future. Refer to https://www.jaka.com/docs/en/guide/SDK/API%20Change.html#deprecated-interfaces.")
-        return func(self, *args, **kwargs)
+        if not wrapper.has_run:
+            context = func.__name__
+            rclpy.logging.get_logger(str(self)).warning(f"{context} is deprecated after controller version 1.7.1, so it might not work in the future. Refer to https://www.jaka.com/docs/en/guide/SDK/API%20Change.html#deprecated-interfaces.")
+            wrapper.has_run = True
+            return func(self, *args, **kwargs)
+    wrapper.has_run = False     
     return wrapper
