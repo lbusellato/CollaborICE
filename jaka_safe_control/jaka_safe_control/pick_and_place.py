@@ -44,20 +44,29 @@ class JAKA(Node):
         self.obstacle_pos_sub = self.create_subscription(String, '/sensors/leap/json', self.obstacle_callback, 1)
         self.obstacle_pos = None
 
+        #Baia:                       Pallet:
+        #                            /----------------
+        #                            |               |
+        #                            |        P1     |
+        #    ----                    |               |
+        #    |B1|                    |  P2           |
+        #    |B2|                    |        P3     |
+        #    |B3|                    |               |
+        #    ----                    -----------------
         # Pick locations
         self.P1_approach = np.array([-150, -467,  25, -np.pi, 0, -20*np.pi/180])
-        self.P1_pick     = np.array([-150, -467,  -25, -np.pi, 0, -20*np.pi/180])
+        self.P1_pick     = np.array([-150, -467, -25, -np.pi, 0, -20*np.pi/180])
         self.P2_approach = np.array([-212, -407,  25, -np.pi, 0, -20*np.pi/180])
-        self.P2_pick     = np.array([-212, -407,  -25, -np.pi, 0, -20*np.pi/180])
+        self.P2_pick     = np.array([-212, -407, -25, -np.pi, 0, -20*np.pi/180])
         self.P3_approach = np.array([-273, -467,  25, -np.pi, 0, -20*np.pi/180])
-        self.P3_pick     = np.array([-273, -467,  -25, -np.pi, 0, -20*np.pi/180])
+        self.P3_pick     = np.array([-273, -467, -25, -np.pi, 0, -20*np.pi/180])
         # Place locations
         self.B1_approach = np.array([-180,  261, 100, -np.pi, 0, -20*np.pi/180])
-        self.B1_place    = np.array([-180,  261, 70, -np.pi, 0, -20*np.pi/180])
-        self.B2_approach = np.array([-285,  261,  100, -np.pi, 0, -20*np.pi/180])
-        self.B2_place    = np.array([-285,  261, 70, -np.pi, 0, -20*np.pi/180])
-        self.B3_approach = np.array([-390,  261,  100, -np.pi, 0, -20*np.pi/180])
-        self.B3_place    = np.array([-390,  261, 70, -np.pi, 0, -20*np.pi/180])
+        self.B1_place    = np.array([-180,  261,  70, -np.pi, 0, -20*np.pi/180])
+        self.B2_approach = np.array([-285,  261, 100, -np.pi, 0, -20*np.pi/180])
+        self.B2_place    = np.array([-285,  261,  70, -np.pi, 0, -20*np.pi/180])
+        self.B3_approach = np.array([-390,  261, 100, -np.pi, 0, -20*np.pi/180])
+        self.B3_place    = np.array([-390,  261,  70, -np.pi, 0, -20*np.pi/180])
         
         # Go to the starting position
         self.home = np.array([-212, -467, 300, -np.pi, 0, -20*np.pi/180])
