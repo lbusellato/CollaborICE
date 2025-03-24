@@ -1288,7 +1288,8 @@ class RealRobot(BaseRobot):
         if self.use_jaka_kinematics:
             raise NotImplementedError('JAKA\'s SDK does not expose the Jacobian.')
         else:
-            # TODO: this is another big bottleneck, we lose about 15Hz with each call. Wiser to compute it analytically, and store the result here.
+            # TODO: this is another big bottleneck, we lose about 15Hz with each call. Wiser to compute it analytically, 
+            # and store the result here.
             if joint_position is None: # Wanting the Jacobian at the current state might be implied
                 joint_position = self.get_joint_position()
             return self.chain.jacob0(joint_position)

@@ -4,7 +4,7 @@ import numpy as np
 
 from jaka_messages.msg import LeapHand
 from jaka_interface.pose_conversions import leap_to_jaka
-from rclpy import Node
+from rclpy.node import Node
 from std_msgs.msg import String
 
 class LeapSubscriberNode(Node):
@@ -27,38 +27,34 @@ class LeapSubscriberNode(Node):
     def leap_subscriber_callback(self, msg: String):
         data = json.loads(msg.data)
         hands = data.get('hands')
+        flag = True
         if hands:
             # Filter out low-confidence hand detections
             confidences = np.array([h.get('confidence') for h in hands])
             hand = hands[np.argmax(confidences)]
-            if hand.get('confidence') < self.min_hand_confidence:
-                self.hand_pos = None
-            else:
-                hand = hands[0]
+            if hand.get('confidence') > self.min_hand_confidence:
                 keypoints = hand.get('hand_keypoints')
 
                 fingers = keypoints.get("fingers", {})
                 palm_position = np.array(keypoints.get('palm_position'))
 
-                joint_positions = [j['prev_joint'] for f in fingers.items() for j in f]
-                if joint_positions:
+                joint_positions = np.array([joint_pos.get('prev_joint') for _, finger in fingers.items() 
+                                                                        for _, joint_pos in finger.items()])
+                if len(joint_positions) > 0:
                     # Compute a bounding sphere from the palm to the farthest away hand joint
-                    joint_positions = np.array(joint_positions)
-                    diffs = joint_positions - palm_position
-                    dists = np.linalg.norm(diffs, axis=1)
-                    self.hand_radius = np.max(dists) * 1000
+                    dists = np.linalg.norm(joint_positions - palm_position, axis=1)
                     # Convert to JAKA world
+                    self.hand_radius = np.max(dists) * 1000
                     self.hand_pos = leap_to_jaka(palm_position)
-                else:
-                    self.hand_radius = 0
-                    self.hand_pos = None
-        else:
+                    flag = False
+        if flag: # No hand was detected
+            self.hand_radius = 0
             self.hand_pos = None
 
     def leap_publisher_callback(self):
         if self.hand_pos is not None:
             x, y, z, = [*self.hand_pos]
-            self.leap_publisher.publish(LeapHand(x=x, y=y, z=z, radius=self.radius))
+            self.leap_publisher.publish(LeapHand(x=x, y=y, z=z, radius=self.hand_radius))
 def main():
     rclpy.init()
     node = LeapSubscriberNode()    
