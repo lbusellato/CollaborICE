@@ -45,8 +45,7 @@ def linear_move(start_pose: list, end_pose: list, max_linear_vel: float=100):
     return tuple(interp_pos) + tuple(interp_rot)
 
 def triangle_wave(tau: float, 
-                t: float=0.0, 
-                x: list=[0.0]*6 )->tuple:
+                t: float=0.0)->tuple:
     """Computes the nominal end-effector trajectory for a fixed orientation triangle wave on the y direction.
 
     Parameters
@@ -55,8 +54,6 @@ def triangle_wave(tau: float,
         Time to compute the trajectory in.
     t : float, optional
         Start time of the trajectory, by default 0.0
-    center : list, optional
-        The current state (unused), by default [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
     Returns
     -------
