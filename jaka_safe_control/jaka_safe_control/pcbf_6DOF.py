@@ -3,10 +3,13 @@ import roboticstoolbox as rtb
 import cvxpy as cp
 from scipy.optimize import minimize_scalar
 import matplotlib.pyplot as plt
+import time
+
+VISUAL_SIM = False
 
 class PCBFSimulation:
     def __init__(self):
-        self.dt = 0.05
+        self.dt = 0.1
         self.t = 0
 
         # Load robot from URDF
@@ -15,235 +18,140 @@ class PCBFSimulation:
         
         # Initial joint configuration (degrees to radians)
         self.robot.q = np.array([85, 89.29, -85.80, 86.51, 90, 40]) * np.pi/180.0
-        
-        # Joint limits
-        #self.q_min = np.array([-170, -80, -170, -170, -170, -360]) * np.pi/180.0
-        #self.q_max = np.array([170, 260, 40, 170, 170, 360]) * np.pi/180.0
+        self.initial_tcp = self.robot.fkine(self.robot.q).t
         
         # Number of joints
         self.n_joints = len(self.robot.q)
         
-        # State space is [joint_positions, joint_velocities]
-        self.state_len = 2 * self.n_joints
+        # Now the state is just joint positions (single integrator)
+        self.state_len = self.n_joints
         
         # Set up visualization
-        self.sim = rtb.backends.PyPlot.PyPlot()
-        self.sim.launch()
-        self.sim.add(self.robot)
+        if VISUAL_SIM:
+            self.sim = rtb.backends.PyPlot.PyPlot()
+            self.sim.launch()
+            self.sim.add(self.robot)
 
         # Obstacle definition (in task space)
         self.obstacle_pos = np.array([-0.4, 0.0, 0.3])
         self.obstacle_radius = 0.08
-        self.min_dist = 0.1
-        self.safety_distance = self.obstacle_radius + self.min_dist
+        self.safety_distance = self.obstacle_radius
 
         # PCBF parameters
-        self.T = 2.5  # Prediction horizon
-        self.m = 4 / (self.T ** 2)  # Barrier function parameter
+        self.T = 3  # Prediction horizon
+        self.m = 6 / (self.T ** 2)  # Barrier function parameter
         self.perturb_delta = 0.1  # For numerical gradient computation
         self.alpha = 1
+        self.lamda = 0.8
+        self.max_joint_vel = np.pi / 2
 
         # Target TCP pose [x, y, z, r, p, y]
         self.tcp_target = np.array([-0.4, -0.3, 0.3, -np.pi, 0, -20*np.pi/180])
         
         # Control parameters
-        self.pos_tolerance = 1e-3
-        self.rot_tolerance = 1e-3
+        self.pos_tolerance = 2e-3
+        self.rot_tolerance = 1e-1
         self.pos_gain = 0.1  # position gain
-        self.rot_gain = 0.2  # orientation gain
-        #self.joint_velocity_limit = 0.5  # rad/s
-        
+        self.rot_gain = 0.1  # orientation gain
+
         # Record trajectories for visualization
         self.trajectory = []
         self.h_values = []
         self.control_inputs = []
 
-    def run_simulation(self, max_iterations=400, verbose=False):
-        """Run the simulation loop"""
-        
-        # Initial state: [joint_positions, joint_velocities]
-        initial_state = np.concatenate([self.robot.q, np.zeros(self.n_joints)])
+    def run_simulation(self, method='vanilla'):
+        """Run the simulation loop using velocity control."""
+        if method == 'vanilla':
+            control_method = self.calculate_u_cbf
+        elif method == 'predictive':
+            control_method = self.calculate_u_pcbf
+
+        # Initial state is the joint positions
+        initial_state = self.robot.q.copy()
         states = [initial_state]
         
-        # Main simulation loop
-        for i in range(max_iterations):
-            # Calculate safe control input
+        it = 0
+        max_it = 1000
+        while not (self.check_convergence(states[-1]) or it >= max_it):
             current_state = states[-1]
-            u, h_value = self.calculate_u_pcbf(self.t, current_state)
-            
-            # Record data for plotting
+                            
+            u, h_value = control_method(self.t, current_state)
+
             self.h_values.append(h_value)
             self.control_inputs.append(u)
-            tcp_pose = self.robot.fkine(current_state[:self.n_joints]).t
+            tcp_pose = self.robot.fkine(current_state).t
             self.trajectory.append(tcp_pose)
             
-            # Update state
-            new_state = self.update_state(self.t, self.t + self.dt, current_state, u)
+            # Update state using single integrator dynamics: q_new = q + u*dt
+            new_state = current_state + u * self.dt
             states.append(new_state)
             
-            # Update visualization
-            self.robot.q = new_state[:self.n_joints]
-            self.sim.step(self.dt)
+            self.robot.q = new_state
+            if VISUAL_SIM:
+                self.sim.step(self.dt)
             
-            # Update time
             self.t += self.dt
-            
-            # Check for convergence to target
-            if self.check_convergence(new_state):
-                print(f"Target reached after {i+1} iterations")
-                break
-            
-            # Print progress
-            if i % 10 == 0 and verbose:
-                print(f"Iteration {i}, t={self.t:.2f}, h={h_value:.4f}")
-                    
-        
-        # Plot results
-        self.plot_results(states)
-        
-        return states, self.h_values, self.control_inputs
-    
-    def update_state(self, t1, t2, state, u):
-        """Update the state using the control input"""
-        dt = t2 - t1
-        
-        # Extract joint positions and velocities
-        q = state[:self.n_joints]
-        q_dot = state[self.n_joints:]
-        
-        # Simple double integrator model for joint dynamics
-        q_new = q + q_dot * dt
-        q_dot_new = q_dot + u * dt
-        
-        # Apply joint limits
-        #q_new = np.clip(q_new, self.q_min, self.q_max)
-        
-        # Apply velocity limits
-        #q_dot_new = np.clip(q_dot_new, -self.joint_velocity_limit, self.joint_velocity_limit)
-        
-        # Combine into new state
-        new_state = np.concatenate([q_new, q_dot_new])
-        
-        return new_state
+            it += 1
+                
+        return states, self.h_values, np.vstack(self.control_inputs)
     
     def h_func(self, state):
         """
-        Safety function: h(x) <= 0 implies safety
-        
-        Computes the distance between the robot's end effector and the obstacle,
-        returns the safety margin (positive when safe)
+        Computes the safety margin: the distance between the end-effector
+        and the obstacle minus the safety distance.
         """
-        # Extract joint positions
-        q = state[:self.n_joints]
-        
-        # Compute forward kinematics to get end effector position
-        tcp_pose = self.robot.fkine(q)
-        tcp_pos = tcp_pose.t  # Extract translation
-        # Compute distance to obstacle
+        tcp_pos = self.robot.fkine(state).t
         distance = np.linalg.norm(tcp_pos - self.obstacle_pos)
-
-        h_val = self.safety_distance - distance
-        
-        # Return safety margin (positive when safe)
+        h_val = distance - self.safety_distance
         return h_val
     
     def h_func_with_gradient(self, state):
-        """Computes the safety function value and its gradient"""
+        """Numerically computes the gradient of h with respect to the state q."""
         h_val = self.h_func(state)
-        
-        # Compute gradient using finite differences
         dh = np.zeros(self.state_len)
         for i in range(self.state_len):
             state_plus = state.copy()
             state_minus = state.copy()
-            
             state_plus[i] += self.perturb_delta
             state_minus[i] -= self.perturb_delta
-            
             h_plus = self.h_func(state_plus)
             h_minus = self.h_func(state_minus)
-            
             dh[i] = (h_plus - h_minus) / (2 * self.perturb_delta)
-        
         return h_val, dh
     
     def path_func(self, tau, t, state):
         """
-        Predict the state at time tau given current state at time t
-        Returns predicted state and its derivatives
+        Predicts the state at time tau using single integrator dynamics:
+        q_pred = q + u_nom * (tau - t)
+        Returns the predicted state, its derivative with respect to tau,
+        derivative with respect to t, and the identity derivative w.r.t. state.
         """
-        # Time difference
         delta_t = tau - t
-        
-        # Extract current joint positions and velocities
-        q = state[:self.n_joints]
-        q_dot = state[self.n_joints:]
-        
-        # Get nominal control (desired joint accelerations)
         u_nom = self.mu_func(state)
+        q = state
+        q_pred = q + u_nom * delta_t
         
-        # Predict joint positions and velocities at time tau
-        # Using a double integrator model: q(t+Δt) = q(t) + q̇(t)·Δt + 0.5·q̈(t)·Δt²
-        q_pred = q + q_dot * delta_t + 0.5 * u_nom * delta_t**2
-        q_dot_pred = q_dot + u_nom * delta_t
+        dp_dtau = u_nom      # ∂q_pred/∂tau
+        dp_dt = -u_nom       # ∂q_pred/∂t
+        dx = np.eye(self.state_len)  # ∂q_pred/∂q
         
-        # Combine into predicted state
-        predicted_state = np.concatenate([q_pred, q_dot_pred])
-        
-        # Compute derivatives if needed (for barrier function)
-        if delta_t == 0:
-            # At t=tau, the derivatives are identity
-            dtau = np.zeros(self.state_len)
-            dt = np.zeros(self.state_len)
-            dx = np.eye(self.state_len)
-        else:
-            # Partial derivatives with respect to tau
-            dq_dtau = q_dot + u_nom * delta_t
-            dq_dot_dtau = u_nom
-            dtau = np.concatenate([dq_dtau, dq_dot_dtau])
-            
-            # Partial derivatives with respect to t (negative of dtau)
-            dt = -dtau
-            
-            # Partial derivatives with respect to x
-            dx = np.zeros((self.state_len, self.state_len))
-            
-            # ∂q_pred/∂q = I
-            dx[:self.n_joints, :self.n_joints] = np.eye(self.n_joints)
-            
-            # ∂q_pred/∂q_dot = Δt·I
-            dx[:self.n_joints, self.n_joints:] = np.eye(self.n_joints) * delta_t
-            
-            # ∂q_dot_pred/∂q_dot = I
-            dx[self.n_joints:, self.n_joints:] = np.eye(self.n_joints)
-            
-            # Note: For full accuracy, we should also compute derivatives of u_nom
-            # with respect to state, but we'll omit that for simplicity
-        
-        return predicted_state, dtau, dt, dx
+        return q_pred, dp_dtau, dp_dt, dx
     
     def find_max(self, t, state):
         """
-        Find the time tau that maximizes h(path(tau, t, state))
-        Returns the time tau, h(path(tau)), and derivative of tau w.r.t. state
+        Finds the time tau within [t, t+T] that maximizes the safety margin h.
+        Returns tau, the corresponding h value, and an approximate derivative.
         """
         def objective(tau):
-            # Negative because we're minimizing
-            predicted_state = self.path_func(tau, t, state)[0]
-            return -self.h_func(predicted_state)
-        
-        # Bound the search to the prediction horizon
+            q_pred = self.path_func(tau, t, state)[0]
+            return -self.h_func(q_pred)
         result = minimize_scalar(objective, bounds=(t, t + self.T), method='bounded')
         tau = result.x
-        h_of_tau = -result.fun  # Convert back to maximum
-        
-        # Compute derivative of tau with respect to state
+        h_of_tau = -result.fun
         dtau_dx = np.zeros(self.state_len)
         for i in range(self.state_len):
             state_perturbed = state.copy()
             state_perturbed[i] += self.perturb_delta
-            
-            # Find new tau with perturbed state
             result_perturbed = minimize_scalar(
                 lambda tau: -self.h_func(self.path_func(tau, t, state_perturbed)[0]),
                 bounds=(t, t + self.T),
@@ -251,32 +159,23 @@ class PCBFSimulation:
             )
             tau_perturbed = result_perturbed.x
             dtau_dx[i] = (tau_perturbed - tau) / self.perturb_delta
-        
         return tau, h_of_tau, dtau_dx
     
     def find_zero(self, tau, t, state):
         """
-        Find the time eta where h(path(eta, t, state)) = 0
-        Returns the time eta and derivative of eta w.r.t. state
+        Finds the time eta where the predicted safety margin crosses zero.
+        Returns eta and its derivative approximation.
         """
         def objective(eta):
-            predicted_state = self.path_func(eta, t, state)[0]
-            return self.h_func(predicted_state)
-        
-        # Try to find the zero between t and tau
+            q_pred = self.path_func(eta, t, state)[0]
+            return self.h_func(q_pred)
         try:
-            # Use bisection method
             eta = self.bisection_root(objective, t, tau, tol=1e-5)
-            
-            # Check if the eta is valid
             if eta > tau or np.isnan(eta):
-                # Sample points and find closest to zero
                 z_values = np.linspace(t, tau, 100)
                 h_values = np.array([objective(z) for z in z_values])
                 closest_idx = np.argmin(np.abs(h_values))
                 start_point = z_values[closest_idx]
-                
-                # Try again with better starting point
                 eta = self.bisection_root(objective, 
                                          max(t, start_point - 0.1), 
                                          min(tau, start_point + 0.1), 
@@ -285,61 +184,40 @@ class PCBFSimulation:
             print(f"Warning: Zero finding failed - {e}")
             eta = t
         
-        # Make sure eta is between t and tau
         if eta < t:
             eta = t
         if eta > tau:
             eta = tau
             print("Warning: eta > tau")
         
-        # Compute derivative of eta with respect to state
-        # Get predicted state at eta
         p, dp_dtau, _, dp_dx = self.path_func(eta, t, state)
-        
-        # Get gradient of safety function
         _, dh = self.h_func_with_gradient(p)
-        
-        # Compute derivative (chain rule)
-        # deta/dx = -(dh/dp)·(dp/dx) / ((dh/dp)·(dp/dtau))
-        denominator = dh @ dp_dtau
+        denominator = dh.dot(dp_dtau)
         if abs(denominator) < 1e-6:
-            # Avoid division by zero
             deta_dx = np.zeros(self.state_len)
         else:
-            deta_dx = -(dh @ dp_dx) / denominator
-        
+            deta_dx = -(dh * dp_dx.diagonal()) / denominator  # approximate derivative
         return eta, deta_dx
     
     def bisection_root(self, f, a, b, tol=1e-5, max_iter=100):
-        """Find root of function f in interval [a,b] using bisection method"""
+        """A simple bisection method to find a root of f in [a, b]."""
         fa = f(a)
         fb = f(b)
-        
-        # Check if there's a sign change in the interval
         if fa * fb > 0:
-            # No sign change, check if close to zero
             if abs(fa) < abs(fb) and abs(fa) < tol:
                 return a
             elif abs(fb) < tol:
                 return b
             else:
-                # Sample interval to look for sign change
                 x_vals = np.linspace(a, b, 20)
                 f_vals = np.array([f(x) for x in x_vals])
                 idx = np.argmin(np.abs(f_vals))
-                
                 if abs(f_vals[idx]) < tol:
                     return x_vals[idx]
-                
-                # Check each subinterval
                 for i in range(len(x_vals) - 1):
                     if f_vals[i] * f_vals[i+1] <= 0:
                         return self.bisection_root(f, x_vals[i], x_vals[i+1], tol, max_iter)
-                
-                # If no zero crossing, return endpoint closer to zero
                 return a if abs(fa) < abs(fb) else b
-        
-        # Apply bisection method
         c = a
         fc = fa
         i = 0        
@@ -358,190 +236,150 @@ class PCBFSimulation:
         return c
     
     def m_func(self, lambda_val):
-        """
-        Compute the PCBF margin function m(λ) = c·λ²
-        Returns function value and derivative
-        """
         m_val = self.m * (lambda_val ** 2)
         dm_val = 2 * self.m * lambda_val
         return m_val, dm_val
     
     def hstar_func(self, t, state):
         """
-        Compute the predictive CBF value and its derivatives
-        Returns hstar, dhstar/dt, and dhstar/du
+        Computes the predictive CBF value h* and its derivatives
+        for the single integrator (velocity control) case.
         """
-        # Find time of maximum safety violation
         m1star, h_of_m1star, dm1star_dx = self.find_max(t, state)
-        
-        # Determine if we need to find zero crossing
-        if h_of_m1star <= 0:
-            # First local maxima is safe, use it
+        if h_of_m1star >= 0:
             r = m1star
             dr_dx = dm1star_dx
         else:
-            # Find zero crossing time
             r, dr_dx = self.find_zero(m1star, t, state)
-            
-            # Switch to M1star if derivative gets too large
+            print('ye')
             if np.linalg.norm(dr_dx) >= 10 * np.linalg.norm(dm1star_dx):
                 dr_dx = dm1star_dx
-        
-        # Compute margin function
         m_val, dm_val = self.m_func(r - t)
-        
-        # Compute H*
         hstar = h_of_m1star - m_val
-        
-        # Get predicted state at m1star
-        predicted_state, _, _, dp_of_tau_dx = self.path_func(m1star, t, state)
-        
-        # Get gradient of safety function at predicted state
+        predicted_state, dp_dtau, _, dp_dx = self.path_func(m1star, t, state)
         _, dh_of_tau_dx = self.h_func_with_gradient(predicted_state)
-        
-        # Control influence matrix (how control affects state)
-        g = np.zeros((self.state_len, self.n_joints))
-        g[self.n_joints:, :] = np.eye(self.n_joints)  # Control only affects velocities
-        
-        # Compute derivatives for control computation
+                
         if m1star <= t + 1e-4:
-            # Case iii - local maximum is at current time
-            # Compute numerical derivative of h w.r.t. tau
-            path_plus_delta = self.path_func(m1star + self.perturb_delta, t, state)[0]
-            h_plus_delta = self.h_func(path_plus_delta)
+            q_pred_plus = self.path_func(m1star + self.perturb_delta, t, state)[0]
+            h_plus_delta = self.h_func(q_pred_plus)
             dh_dtau = (h_plus_delta - h_of_m1star) / self.perturb_delta
-            
-            # Since the system is control-affine, dtau_dt = 1
             dhstar_dt = dh_dtau
-            dhstar_du = (dh_of_tau_dx @ dp_of_tau_dx @ g)
-            
+            dhstar_du = dh_of_tau_dx
         elif m1star < t + self.T:
-            # Case i - local maximum is within prediction horizon
-            dhstar_dt = -dm_val  # Time derivative comes from margin function
-            dhstar_du = (dh_of_tau_dx @ dp_of_tau_dx - dm_val * dr_dx) @ g
-            
+            dhstar_dt = -dm_val
+            dhstar_du = (dh_of_tau_dx - dm_val * dr_dx)
         elif m1star <= t + self.T + 1e-4:
-            # Case ii/iii - local maximum is at prediction horizon boundary
             if h_of_m1star > 0:
-                # Case ii - unsafe at horizon boundary
-                path_plus_delta = self.path_func(m1star + self.perturb_delta, t, state)[0]
-                h_plus_delta = self.h_func(path_plus_delta)
+                q_pred_plus = self.path_func(m1star + self.perturb_delta, t, state)[0]
+                h_plus_delta = self.h_func(q_pred_plus)
                 dh_dtau = (h_plus_delta - h_of_m1star) / self.perturb_delta
-                
                 dhstar_dt = -dm_val + dh_dtau
-                dhstar_du = (dh_of_tau_dx @ dp_of_tau_dx - dm_val * dr_dx) @ g
+                dhstar_du = (dh_of_tau_dx - dm_val * dr_dx)
             else:
-                # Case iii - safe at horizon boundary
-                path_plus_delta = self.path_func(m1star + self.perturb_delta, t, state)[0]
-                h_plus_delta = self.h_func(path_plus_delta)
+                q_pred_plus = self.path_func(m1star + self.perturb_delta, t, state)[0]
+                h_plus_delta = self.h_func(q_pred_plus)
                 dh_dtau = (h_plus_delta - h_of_m1star) / self.perturb_delta
-                
                 dhstar_dt = dh_dtau
-                dhstar_du = dh_of_tau_dx @ dp_of_tau_dx @ g
+                dhstar_du = dh_of_tau_dx
         else:
             print("Warning: m1star > t+T")
             dhstar_dt = 0
-            dhstar_du = np.zeros(self.n_joints)
+            dhstar_du = np.zeros(self.state_len)
         
         return hstar, dhstar_dt, dhstar_du
     
     def mu_func(self, state):
         """
-        Nominal control law (task-space PD controller)
-        Computes desired joint accelerations to reach target
+        Nominal control law for velocity control.
+        Uses a task-space proportional controller to generate a joint velocity command.
         """
-        # Extract joint positions and velocities
-        q = state[:self.n_joints]
-        q_dot = state[self.n_joints:]
-        
-        # Get current end-effector pose
+        q = state
         current_pose = self.robot.fkine(q)
         current_pos = current_pose.t
-        
-        # Get target position
         target_pos = self.tcp_target[:3]
-        
-        # Position error
         pos_error = target_pos - current_pos
         pos_error_mag = np.linalg.norm(pos_error)
 
         rot_current = self.rpy_to_R(current_pose.rpy())
         rot_target = self.rpy_to_R(self.tcp_target[3:6])
-
-        rot_error = rot_target.dot(rot_current.T)
+        rot_error_mat = rot_target.dot(rot_current.T)
         rot_error = 0.5 * np.array([
-            rot_error[2, 1] - rot_error[1, 2],
-            rot_error[0, 2] - rot_error[2, 0],
-            rot_error[1, 0] - rot_error[0, 1]
+            rot_error_mat[2, 1] - rot_error_mat[1, 2],
+            rot_error_mat[0, 2] - rot_error_mat[2, 0],
+            rot_error_mat[1, 0] - rot_error_mat[0, 1]
         ])
         rot_error_norm = np.linalg.norm(rot_error)
                     
-        # Compute task-space velocity command
         v_cmd = np.zeros(6)
         
-        # Position component
         if pos_error_mag > self.pos_tolerance:
-            v_cmd[:3] = self.pos_gain * pos_error / max(pos_error_mag, 1e-6)
+            v_cmd[:3] = self.pos_gain * pos_error
         
-        # Rotation component
         if rot_error_norm > self.rot_tolerance:
-            v_cmd[3:] = self.rot_gain * rot_error / max(rot_error_norm, 1e-6)
+            v_cmd[3:] = self.rot_gain * rot_error
             
-        # Get Jacobian
         J = self.robot.jacob0(q)
-        
-        # Compute pseudo-inverse of Jacobian
         J_pinv = np.linalg.pinv(J)
-        
-        # Transform to joint velocities
         q_dot_des = J_pinv @ v_cmd
         
-        # Simple PD control for joint accelerations
-        kp = 5.0  # Position gain
-        kd = 1.0  # Damping gain
-        
-        # q̈ = kp·(q̇_des - q̇) - kd·q̇
-        u = kp * (q_dot_des - q_dot) - kd * q_dot
-        
-        return u
+        return q_dot_des
     
     def calculate_u_pcbf(self, t, state):
         """
-        Calculate control input using QP with PCBF constraint
-        Returns the safe control input and the safety value
+        Calculates the safe velocity command using a QP with the predictive CBF constraint.
+        The constraint is: dhstar_dt + dhstar_du·u + α·hstar ≥ 0.
         """
-        # Get barrier function and derivatives
         hstar, dhstar_dt, dhstar_du = self.hstar_func(t, state)
-        
-        # Get nominal control
+        h_val = self.h_func(state)
         u_nom = self.mu_func(state)
                 
-        # Set up QP
-        # Objective: minimize ||u - u_nom||²
-        J = np.eye(self.n_joints)  # Cost matrix
-        F = -u_nom  # Linear term
+        J = np.eye(self.n_joints)
+        F = -u_nom
         
-        # Constraint: dhstar_dt + dhstar_du · u + α · hstar ≥ 0
-        # Rearranged: dhstar_du · u ≥ -dhstar_dt - α · hstar
         A = dhstar_du.reshape(1, self.n_joints)
         b = np.array([-dhstar_dt - self.alpha * hstar])
         
-        # Solve QP using CVXPY
         u = cp.Variable(self.n_joints)
         objective = cp.Minimize(0.5 * cp.quad_form(u, J) + F.T @ u)
-        constraints = [A @ u >= b]
+        constraints = [A @ u >= b,
+            u >= -self.max_joint_vel,
+            u <= self.max_joint_vel]
         
-        # Add joint acceleration limits if needed
-        #constraints.extend([
-        #    u >= -5.0,  # Lower limit
-        #    u <= 5.0,   # Upper limit
-        #])
-        
-        # Solve the problem
         problem = cp.Problem(objective, constraints)
         try:
             problem.solve(solver=cp.OSQP)
+            if u.value is None or np.any(np.isnan(u.value)):
+                print("QP failed, using nominal control")
+                u_safe = u_nom
+            else:
+                u_safe = u.value
+        except Exception as e:
+            print(f"QP solver error: {e}")
+            u_safe = u_nom
             
+        return u_safe, h_val
+    
+    def calculate_u_cbf(self, t, state):
+        """
+        CBF-based velocity control for single integrator dynamics.
+        Enforces: ∇h(q)·u + α·h(q) ≥ 0.
+        """
+        h_val = self.h_func(state)
+        _, grad_h_q = self.h_func_with_gradient(state)
+        u_nom = self.mu_func(state)
+        
+        b_rhs = -self.lamda * h_val
+        
+        J = np.eye(self.n_joints)
+        F = -u_nom
+        
+        u = cp.Variable(self.n_joints)
+        objective = cp.Minimize(0.5 * cp.quad_form(u, J) + F.T @ u)
+        constraints = [grad_h_q.reshape(1, self.n_joints) @ u >= b_rhs]
+        
+        problem = cp.Problem(objective, constraints)
+        try:
+            problem.solve(solver=cp.OSQP)
             if u.value is None or np.any(np.isnan(u.value)):
                 print("QP failed, using nominal control")
                 u_safe = u_nom
@@ -551,33 +389,31 @@ class PCBFSimulation:
             print(f"QP solver error: {e}")
             u_safe = u_nom
         
-        return u_safe, hstar
+        return u_safe, h_val
     
     def check_convergence(self, state):
-        """Check if the robot has reached the target"""
-        # Get current end-effector pose
-        q = state[:self.n_joints]
+        """Checks if the end-effector is close enough to the target."""
+        q = state
         current_pose = self.robot.fkine(q)
         current_pos = current_pose.t
-        
-        # Position error
         pos_error = np.linalg.norm(current_pos - self.tcp_target[:3])
-        
-        # Orientation error (simplified)
         current_rpy = self.extract_rpy(current_pose)
-        rot_error = np.linalg.norm(current_rpy - self.tcp_target[3:6])
+        rpy_error = np.array([self.angle_diff(current_rpy[i], self.tcp_target[3+i]) for i in range(3)])
+        rot_error = np.linalg.norm(rpy_error)
         
-        # Check if within tolerance
         return (pos_error < self.pos_tolerance * 10 and 
                 rot_error < self.rot_tolerance * 10)
     
+    def angle_diff(self, a, b):
+        diff = a - b
+        return np.arctan2(np.sin(diff), np.cos(diff))
+
     def extract_rpy(self, pose):
-        """Extract RPY angles from pose matrix"""
+        """Extract RPY angles from the pose matrix."""
         return np.array(pose.rpy())
     
     def rpy_to_R(self, rpy):
         r, p, y = rpy
-
         cr, sr = np.cos(r), np.sin(r)
         cp, sp = np.cos(p), np.sin(p)
         cy, sy = np.cos(y), np.sin(y)
@@ -589,51 +425,32 @@ class PCBFSimulation:
         return R
     
     def set_axes_equal(self, ax):
-        """
-        Make axes of 3D plot have equal scale so that spheres appear as spheres,
-        cubes as cubes, etc.
-
-        Input
-        ax: a matplotlib axis, e.g., as output from plt.gca().
-        """
-
+        """Ensures equal scaling on all axes for a 3D plot."""
         x_limits = ax.get_xlim3d()
         y_limits = ax.get_ylim3d()
         z_limits = ax.get_zlim3d()
-
         x_range = abs(x_limits[1] - x_limits[0])
         x_middle = np.mean(x_limits)
         y_range = abs(y_limits[1] - y_limits[0])
         y_middle = np.mean(y_limits)
         z_range = abs(z_limits[1] - z_limits[0])
         z_middle = np.mean(z_limits)
-
-        # The plot bounding box is a sphere in the sense of the infinity
-        # norm, hence I call half the max range the plot radius.
-        plot_radius = 0.5*max([x_range, y_range, z_range])
-
+        plot_radius = 0.5 * max([x_range, y_range, z_range])
         ax.set_xlim3d([x_middle - plot_radius, x_middle + plot_radius])
         ax.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
         ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
 
     def plot_results(self, states):
-        """Plot simulation results"""
-        
-        # Time vector
-        t_vec = np.arange(0, len(states) * self.dt, self.dt)
-                
-        # Plot safety value
+        """Plots safety value and end-effector trajectory."""
         plt.subplot(1, 2, 1)
-        plt.plot(t_vec[:-1], self.h_values, label='h')
+        plt.plot(self.h_values, label='h')
         plt.axhline(y=0, color='b', linestyle='--', label='Safety Threshold')
-        plt.axhline(y=self.safety_distance, color='r', linestyle='--', label='Safety Distance')
         plt.xlabel('Time (s)')
         plt.ylabel('Safety Value')
         plt.legend()
         plt.title('Safety Constraint (h* ≥ 0 is unsafe)')
         plt.grid(True)
         
-        # Plot end-effector trajectory in 3D
         plt.subplot(1, 2, 2, projection='3d')
         traj = np.array(self.trajectory)
         ax = plt.gca()
@@ -642,13 +459,13 @@ class PCBFSimulation:
                    color='r', s=100, label='Obstacle')
         ax.scatter(self.tcp_target[0], self.tcp_target[1], self.tcp_target[2], 
                    color='g', s=100, label='Target')
+        ax.scatter(self.initial_tcp[0], self.initial_tcp[1], self.initial_tcp[2], 
+                   color='b', s=100, label='Start')
         
-        
-        # Draw sphere around obstacle
         u, v = np.mgrid[0:2*np.pi:20j, 0:np.pi:10j]
-        x = self.obstacle_pos[0] + self.obstacle_radius * np.cos(u) * np.sin(v)
-        y = self.obstacle_pos[1] + self.obstacle_radius * np.sin(u) * np.sin(v)
-        z = self.obstacle_pos[2] + self.obstacle_radius * np.cos(v)
+        x = self.obstacle_pos[0] + self.safety_distance * np.cos(u) * np.sin(v)
+        y = self.obstacle_pos[1] + self.safety_distance * np.sin(u) * np.sin(v)
+        z = self.obstacle_pos[2] + self.safety_distance * np.cos(v)
         ax.plot_surface(x, y, z, color='r', alpha=0.2)
         
         ax.set_xlabel('X (m)')
@@ -661,10 +478,87 @@ class PCBFSimulation:
         plt.tight_layout()
         plt.show(block=True)
 
+def compare_simulations():
+
+    # Run simulation with vanilla (standard) CBF
+    print('Simulating vanilla CBF...', end='')
+    start_time = time.time()
+    sim_vanilla = PCBFSimulation()
+    states_vanilla, h_vals_vanilla, u_vanilla = sim_vanilla.run_simulation(method='vanilla')
+    print('done.')
+    elapsed = time.time() - start_time
+    avg_dt = elapsed / len(states_vanilla)
+    print(f"Time elapsed: {elapsed},  avg timestep: {avg_dt}")
+
+    # Run simulation with predictive CBF
+    print('Simulating predictive CBF...', end='')
+    start_time = time.time()
+    sim_predictive = PCBFSimulation()
+    states_predictive, h_vals_predictive, u_predictive = sim_predictive.run_simulation(method='predictive')
+    print('done.')
+    elapsed = time.time() - start_time
+    avg_dt = elapsed / len(states_predictive)
+    print(f"Time elapsed: {elapsed},  avg timestep: {avg_dt}")
+    
+    if VISUAL_SIM:
+        sim_vanilla.sim.close()
+        sim_predictive.sim.close()
+
+    # Plot safety value comparison
+    fig = plt.figure(figsize=(10,8))
+    ax = fig.add_subplot(121)
+    ax.plot(h_vals_vanilla, label="Vanilla CBF")
+    ax.plot(h_vals_predictive, label="Predictive CBF")
+    ax.axhline(y=0, color='black', linestyle='--', label="Safety Threshold")
+    ax.set_xlabel("Time step")
+    ax.set_ylabel("Safety Value")
+    ax.set_title("Safety Value Comparison")
+    ax.legend()
+    ax.grid(True)
+
+    ax = fig.add_subplot(122)
+    ax.plot(u_vanilla[:,0], label="Vanilla CBF")
+    ax.plot(u_predictive[:,0], label="Predictive CBF")
+    ax.set_xlabel("Time step")
+    ax.set_ylabel("Velocity [rad/s]")
+    ax.set_title("Joint 0 control signal Comparison")
+    ax.legend()
+    ax.grid(True)
+    
+    # Plot end-effector trajectory comparison in 3D
+    fig = plt.figure(figsize=(10,8))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    traj_vanilla = np.array([sim_vanilla.robot.fkine(state).t for state in states_vanilla])
+    traj_predictive = np.array([sim_predictive.robot.fkine(state).t for state in states_predictive])
+    
+    ax.scatter(traj_vanilla[:, 0], traj_vanilla[:, 1], traj_vanilla[:, 2], label="Vanilla CBF", color='blue')
+    ax.scatter(traj_predictive[:, 0], traj_predictive[:, 1], traj_predictive[:, 2], label="Predictive CBF", color='orange')
+    
+    ax.scatter(sim_predictive.obstacle_pos[0], sim_predictive.obstacle_pos[1], sim_predictive.obstacle_pos[2],
+            color='red', s=100, label="Obstacle")
+    ax.scatter(sim_predictive.tcp_target[0], sim_predictive.tcp_target[1], sim_predictive.tcp_target[2],
+            color='green', s=100, label="Target")
+    ax.scatter(sim_predictive.initial_tcp[0], sim_predictive.initial_tcp[1], sim_predictive.initial_tcp[2],
+            color='blue', s=100, label="Start")
+    u, v = np.mgrid[0:2*np.pi:20j, 0:np.pi:10j]
+    x = sim_predictive.obstacle_pos[0] + sim_predictive.safety_distance * np.cos(u) * np.sin(v)
+    y = sim_predictive.obstacle_pos[1] + sim_predictive.safety_distance * np.sin(u) * np.sin(v)
+    z = sim_predictive.obstacle_pos[2] + sim_predictive.safety_distance * np.cos(v)
+    ax.plot_surface(x, y, z, color='r', alpha=0.2)
+    
+    ax.set_xlabel("X (m)")
+    ax.set_ylabel("Y (m)")
+    ax.set_zlabel("Z (m)")
+    ax.set_title("End-Effector Trajectory Comparison")
+    ax.legend()
+
+    sim_predictive.set_axes_equal(ax)
+    
+    plt.show(block=True)
 
 def main():
-    sim = PCBFSimulation()
-    sim.run_simulation(max_iterations=300)
+    compare_simulations()
 
 if __name__ == "__main__":
     main()

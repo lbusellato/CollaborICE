@@ -1249,8 +1249,7 @@ class RealRobot(BaseRobot):
         else:
             if ref_pos is None:
                 ref_pos = self.get_joint_position()
-            # TODO: We use the Levenberg-Marquardt algorithm because it's the fastest without tuning parameters, perhaps we 
-            # could investigate using tuned others (Gauss-Newton, Newton-Raphson) to push performance even further
+            # TODO: We use the Levenberg-Marquardt algorithm because it's the fastest without tuning parameters, perhaps we could investigate using tuned others (Gauss-Newton, Newton-Raphson) to push performance even further
             ret = self.chain.ik_LM(jaka_to_se3(cartesian_pose), q0=ref_pos)
             return ((JAKA_ERR_CODES.ERR_KINE_INVERSE_ERR.value,) if not ret[1] else (JAKA_ERR_CODES.SUCCESS_CODE.value, ret[0]))
 
