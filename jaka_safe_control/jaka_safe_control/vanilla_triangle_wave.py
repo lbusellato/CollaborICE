@@ -28,7 +28,7 @@ class JAKA(Node):
 
         self.t = 0
         self.dt = 0.008
-        self.control_loop_timer = self.create_timer(self.dt, self.control_loop) 
+        #self.control_loop_timer = self.create_timer(self.dt, self.control_loop) 
 
         # CBF parameters
         gamma = 0.8
@@ -51,11 +51,9 @@ class JAKA(Node):
                                                 qd_smoothing_factor,
                                                 self.dt)
         
-        # Go to the starting position, after waiting for user confirmation
-        input('Press any key to start. The robot will move to the home position!')
         self.home = np.array([-400, 300, 300, -np.pi, 0, -20*np.pi/180])
         self.jaka_interface.robot.disable_servo_mode()
-        self.jaka_interface.robot.linear_move(self.home, MoveMode.ABSOLUTE, 200, True)
+        #self.jaka_interface.robot.linear_move(self.home, MoveMode.ABSOLUTE, 200, True)
         self.jaka_interface.robot.enable_servo_mode()
 
         self.path_function = triangle_wave

@@ -1,12 +1,16 @@
 import numpy as np
 import roboticstoolbox as rtb
 import cvxpy as cp
-from scipy.optimize import minimize, root_scalar
+from scipy.optimize import minimize_scalar
 import matplotlib.pyplot as plt
-import time
 import tqdm
+from roboticstoolbox.backends.swift import Swift
+import spatialgeometry as sg
+import spatialmath as sm    
+import time
+import json
 
-VISUAL_SIM = False
+VISUAL_SIM = True
 DO_PREDICTIVE = True
 DYNAMIC_OBSTACLE = True
 
@@ -16,7 +20,7 @@ class PCBFSimulation:
         self.t = 0
 
         # Load robot from URDF
-        urdf_path = "/home/buse/collaborice_ws/src/jaka_description/urdf/jaka.urdf"
+        urdf_path = "/home/jaka/ros2_ws/src/jaka_description/urdf/jaka_swift.urdf"
         self.robot = rtb.ERobot.URDF(urdf_path)
         
         # Initial joint configuration (degrees to radians)
@@ -28,12 +32,6 @@ class PCBFSimulation:
         
         # Now the state is just joint positions (single integrator)
         self.state_len = self.n_joints
-        
-        # Set up visualization
-        if VISUAL_SIM:
-            self.sim = rtb.backends.PyPlot.PyPlot()
-            self.sim.launch()
-            self.sim.add(self.robot)
 
         # Obstacle definition (in task space)
         self.obstacle_pos = np.array([-0.4, 0.0, 0.3])
@@ -43,14 +41,37 @@ class PCBFSimulation:
         self.obstacle_base_pos = self.obstacle_pos.copy()  
         self.obstacle_amplitude = 0.05    # meters
         self.obstacle_freq      = 0.25    # Hz (i.e. one full up-down every 2s)
+        
+        self.leap_hand = np.load('./hand_pos.npy')           # shape (N, 3)
+        self.leap_radius = np.load('./hand_radius.npy').ravel()  # shape (N,)
+
+        # Initialize obstacle at first hand sample
+        self.obstacle_pos = self.leap_hand[0].copy()
+        self.obstacle_radius = float(self.leap_radius[0])
+
+        self.step_count = 0  # counter for hand data index
+
+        # Set up visualization
+        if VISUAL_SIM:
+            self.sim = Swift() #rtb.backends.PyPlot.PyPlot()
+            self.sim.launch()
+            self.sim.add(self.robot)
+
+            self.obstacle_sphere = sg.Sphere(
+                radius=self.obstacle_radius+ 0.01, 
+                pose=sm.SE3(self.obstacle_pos), 
+                color=[1, 0, 0, 0.5]  # RGBA, 50% transparent red
+            )
+
+            self.sim.add(self.obstacle_sphere)
 
         # PCBF parameters
-        self.T = 1.5  # Prediction horizon
-        self.m = 0.001 / (self.T ** 2)  # Barrier function parameter
-        self.perturb_delta = 0.001  # For numerical gradient computation
-        self.alpha = 2   
+        self.T = 1  # Prediction horizon
+        self.m = 0.001  # Barrier function parameter
+        self.perturb_delta = 0.01  # For numerical gradient computation
+        self.alpha = 2
         self.lamda = self.alpha # for consistency, static = 0.8, dynamic = 40, predictive = 40
-        self.max_joint_vel = np.pi / 2
+        self.max_joint_vel = np.pi / 4
 
         # Target TCP pose [x, y, z, r, p, y]
         self.tcp_target = np.array([-0.4, -0.3, 0.3, -np.pi, 0, -20*np.pi/180])
@@ -79,6 +100,7 @@ class PCBFSimulation:
         
         max_it = 1000
         for i in tqdm.tqdm(range(max_it), desc=f"{method} CBF"):
+            start = time.time()
             
             if DYNAMIC_OBSTACLE: self.update_obstacle()
 
@@ -101,30 +123,93 @@ class PCBFSimulation:
                 self.sim.step(self.dt)
             
             self.t += self.dt
+
+            actual_dt = time.time() - start
+            if actual_dt < self.dt: time.sleep(self.dt - actual_dt)
                             
         return states, self.h_values, np.vstack(self.control_inputs)
 
     def update_obstacle(self):
-        """Call once per iteration to move obstacle in z as a sine wave."""
-        self.obstacle_pos[2] = (
-            self.obstacle_base_pos[2]
-            + self.obstacle_amplitude 
-            * np.sin(2*np.pi * self.obstacle_freq * self.t)
-        )
+        #"""Call once per iteration to move obstacle in z as a sine wave."""
+        #self.obstacle_pos[2] = (
+        #    self.obstacle_base_pos[2]
+        #    + self.obstacle_amplitude 
+        #    * np.sin(2*np.pi * self.obstacle_freq * self.t)
+        #)
+        #if VISUAL_SIM: self.obstacle_sphere.T = sm.SE3(self.obstacle_pos)
+
+        """Update obstacle pose and radius from recorded hand data each step."""
+        # Determine current index (clamp to last sample if needed)
+        idx = min(self.step_count, len(self.leap_hand) - 1)
+        # Update obstacle properties
+        self.obstacle_pos = self.leap_hand[idx].copy()
+        self.obstacle_radius = float(self.leap_radius[idx])
+
+        # Update visualization
+        if VISUAL_SIM:
+            # Update sphere radius and pose
+            self.obstacle_sphere.radius = self.obstacle_radius+ 0.01
+            self.obstacle_sphere.T = sm.SE3(self.obstacle_pos)
+
+        # Advance to next data sample
+        self.step_count += 1
 
     def h_func(self, t, state):
+        """
+        Computes the safety margin between a dynamic spherical obstacle and 
+        a cylindrical end-effector (EE) volume centered at the TCP.
+
+        The cylinder is aligned with the TCP z-axis, has height h_cyl, and radius r_cyl.
+        """
+        # EE shape
+        r_cyl = 0.045  # cylinder radius [m]
+        h_cyl = -0.35   # cylinder height [m]
+
+        # TCP pose and orientation
+        tcp_pose = self.robot.fkine(state)
+        tcp_pos = tcp_pose.t
+        tcp_z_axis = tcp_pose.R[:, 2]  # z-axis of EE
+
+        # Endpoint of cylinder axis
+        cyl_top = tcp_pos + h_cyl * tcp_z_axis
+
+        # Obstacle position
+        obstacle_pos = self.obstacle_pos.copy()
+        if DYNAMIC_OBSTACLE:
+            obstacle_pos[2] = (
+                self.obstacle_base_pos[2]
+                + self.obstacle_amplitude 
+                * np.sin(2*np.pi * self.obstacle_freq * t)
+            )
+
+        # Project obstacle onto cylinder axis
+        axis_vec = cyl_top - tcp_pos
+        axis_dir = axis_vec / np.linalg.norm(axis_vec)
+        vec_to_obs = obstacle_pos - tcp_pos
+        proj_length = np.dot(vec_to_obs, axis_dir)
+        proj_length_clamped = np.clip(proj_length, 0, np.linalg.norm(axis_vec))
+        closest_point_on_axis = tcp_pos + proj_length_clamped * axis_dir
+
+        # Distance from obstacle to closest surface point on the cylinder
+        dist_to_cylinder_surface = np.linalg.norm(obstacle_pos - closest_point_on_axis) - r_cyl
+
+        # Safety margin
+        return self.safety_distance - dist_to_cylinder_surface
+
+    def old_h_func(self, t, state):
         """
         Computes the safety margin: the distance between the end-effector
         and the obstacle minus the safety distance.
         """
         tcp_pos = self.robot.fkine(state).t
-        predicted_obstacle_pos = self.obstacle_pos.copy()
-        predicted_obstacle_pos[2] = (
-            self.obstacle_base_pos[2]
-            + self.obstacle_amplitude 
-            * np.sin(2*np.pi * self.obstacle_freq * t)
-        )
-        distance = np.linalg.norm(tcp_pos - predicted_obstacle_pos)#self.obstacle_pos)
+        obstacle_pos = self.obstacle_pos.copy()
+        if DYNAMIC_OBSTACLE:
+            obstacle_pos[2] = (
+                self.obstacle_base_pos[2]
+                + self.obstacle_amplitude 
+                * np.sin(2*np.pi * self.obstacle_freq * t)
+            )
+        distance = np.linalg.norm(tcp_pos - obstacle_pos)
         return self.safety_distance - distance
     
     def h_func_with_gradient(self, t, state):
@@ -164,22 +249,13 @@ class PCBFSimulation:
         Finds the time tau within [t, t+T] that maximizes the safety margin h.
         Returns tau, the corresponding h value, and an approximate derivative dtau_dx.
         """
-        # Define the objective: negative h value to maximize h via minimization.
-        def objective(tau):
-            return -self.h_func(tau, self.path_func(tau, t, state)[0])
-        
-        # Define an explicit zero Hessian for the scalar variable tau.
-        zero_hessian = lambda x: np.zeros((1, 1))
-        
+                
         # Solve the optimization using trust-constr with the zero Hessian.
-        result = minimize(
-            objective,
-            x0=t,
-            bounds=[(t, t + self.T)],
-            method='trust-constr',
-            hess=zero_hessian
+        result = minimize_scalar(
+            lambda tau: -self.h_func(tau, self.path_func(tau, t, state)[0]),
+            bounds=[t, t + self.T],
         )
-        tau = result.x[0]
+        tau = result.x
         h_of_tau = -result.fun
 
         # Approximate dtau/dx via finite differences.
@@ -187,37 +263,29 @@ class PCBFSimulation:
         for i in range(self.state_len):
             state_perturbed = state.copy()
             state_perturbed[i] += self.perturb_delta
-            result_perturbed = minimize(
+            result_perturbed = minimize_scalar(
                 lambda tau: -self.h_func(tau, self.path_func(tau, t, state_perturbed)[0]),
-                x0=t,
-                bounds=[(t, t + self.T)],
-                method='trust-constr',
-                hess=zero_hessian
+                bounds=[t, t + self.T],
             )
-            tau_perturbed = result_perturbed.x[0]
+            tau_perturbed = result_perturbed.x
             dtau_dx[i] = (tau_perturbed - tau) / self.perturb_delta
 
         return tau, h_of_tau, dtau_dx
     
     def find_zero(self, tau, t, x):
-        # Define the target function (anonymous function equivalent)
         f = lambda z: self.h_func(z, self.path_func(z, t, x)[0])
         
-        # Use the custom bisection routine my_fzero to find the zero in [t, tau]
-        eta = self.my_fzero(f, t, tau)
-        
-        # Compute the derivative dx if requested (here we always compute it)
-        # Assuming h_func returns a tuple where the second element is dh,
-        # and path_func returns a tuple with second and fourth elements corresponding to dp_dtau and dp_dx.
-        _, dh = self.h_func_with_gradient(tau, self.path_func(eta, t, x)[0])
-        _, dp_dtau, _, dp_dx = self.path_func(eta, t, x)
+        eta = self.fzero(f, t, tau)
+
+        p, dp_dtau, _, dp_dx = self.path_func(eta, t, x)
+        _, dh = self.h_func_with_gradient(tau, p)
         dx = -dh @ dp_dx / (dh @ dp_dtau)
         
         return eta, dx
 
-    def my_fzero(self, func, t1, t2, tol=1e-5, max_iter=1000):
+    def fzero(self, func, t1, t2, tol=1e-5, max_iter=1000):
         """
-        A custom bisection method for finding a zero in [t1, t2].
+        use the bisection method to find a zero of *func* in [t1, t2].
         
         Parameters:
             func    (callable): The function for which to find a root.
@@ -255,14 +323,14 @@ class PCBFSimulation:
             tau = (t1 + t2) / 2.0
             h = func(tau)
             if count > max_iter:
-                print("Failure in my_fzero: Maximum iterations exceeded.")
+                print("Failure in fzero: Maximum iterations exceeded.")
                 break
 
         return tau
     
     def m_func(self, lambda_val):
-        m_val = self.m * lambda_val
-        dm_val = 2 * self.m
+        m_val = self.m * lambda_val**2
+        dm_val = 2 * self.m * lambda_val
         return m_val, dm_val
     
     def hstar_func(self, t, state):
@@ -364,7 +432,7 @@ class PCBFSimulation:
         H, dHdt, dHdu = self.hstar_func(t, state)
         h_val = self.h_func(t, state)
         u_nom = self.mu_func(state)
-                
+        
         J = np.eye(self.n_joints)
         F = np.zeros(self.n_joints)
         
@@ -526,7 +594,7 @@ def compare_simulations():
 
     # Plot safety value comparison
     fig = plt.figure(figsize=(10,8))
-    ax = fig.add_subplot(111)
+    ax = fig.add_subplot(121)
     ax.plot(h_vals_vanilla, label="Vanilla CBF")
     if DO_PREDICTIVE: ax.plot(h_vals_predictive, label="Predictive CBF")
     ax.axhline(y=0, color='black', linestyle='--', label="Safety Threshold")
@@ -536,14 +604,14 @@ def compare_simulations():
     ax.legend()
     ax.grid(True)
 
-    #ax = fig.add_subplot(122)
-    #ax.plot(u_vanilla[:,0], label="Vanilla CBF")
-    #ax.plot(u_predictive[:,0], label="Predictive CBF")
-    #ax.set_xlabel("Time step")
-    #ax.set_ylabel("Velocity [rad/s]")
-    #ax.set_title("Joint 0 control signal Comparison")
-    #ax.legend()
-    #ax.grid(True)
+    ax = fig.add_subplot(122)
+    ax.plot(u_vanilla[:,0], label="Vanilla CBF")
+    ax.plot(u_predictive[:,0], label="Predictive CBF")
+    ax.set_xlabel("Time step")
+    ax.set_ylabel("Velocity [rad/s]")
+    ax.set_title("Joint 0 control signal Comparison")
+    ax.legend()
+    ax.grid(True)
     
     # Plot end-effector trajectory comparison in 3D
     fig = plt.figure(figsize=(10,8))
