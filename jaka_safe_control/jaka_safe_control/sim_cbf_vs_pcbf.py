@@ -8,11 +8,10 @@ from roboticstoolbox.backends.swift import Swift
 import spatialgeometry as sg
 import spatialmath as sm    
 import time
-import json
 
 VISUAL_SIM = True
 DO_PREDICTIVE = True
-DYNAMIC_OBSTACLE = True
+HAND = True
 
 class PCBFSimulation:
     def __init__(self):
@@ -33,23 +32,19 @@ class PCBFSimulation:
         # Now the state is just joint positions (single integrator)
         self.state_len = self.n_joints
 
+        self.leap_hand = np.load('./hand_pos.npy')           # shape (N, 3)
+        self.leap_radius = np.load('./hand_radius.npy').ravel()  # shape (N,)
+        self.leap_start_count = 1600
+        self.step_count = self.leap_start_count
+
         # Obstacle definition (in task space)
-        self.obstacle_pos = np.array([-0.4, 0.0, 0.3])
-        self.obstacle_radius = 0.08
-        self.safety_distance = self.obstacle_radius
+        self.obstacle_pos = self.leap_hand[self.step_count]
+        self.obstacle_radius = 0.05 # For sim purposes, can't dinamically change the radius of the plotted sphere
+        self.safety_distance = self.leap_radius[self.step_count]
 
         self.obstacle_base_pos = self.obstacle_pos.copy()  
         self.obstacle_amplitude = 0.05    # meters
         self.obstacle_freq      = 0.25    # Hz (i.e. one full up-down every 2s)
-        
-        self.leap_hand = np.load('./hand_pos.npy')           # shape (N, 3)
-        self.leap_radius = np.load('./hand_radius.npy').ravel()  # shape (N,)
-
-        # Initialize obstacle at first hand sample
-        self.obstacle_pos = self.leap_hand[0].copy()
-        self.obstacle_radius = float(self.leap_radius[0])
-
-        self.step_count = 0  # counter for hand data index
 
         # Set up visualization
         if VISUAL_SIM:
@@ -58,18 +53,20 @@ class PCBFSimulation:
             self.sim.add(self.robot)
 
             self.obstacle_sphere = sg.Sphere(
-                radius=self.obstacle_radius+ 0.01, 
+                radius=self.obstacle_radius, 
                 pose=sm.SE3(self.obstacle_pos), 
                 color=[1, 0, 0, 0.5]  # RGBA, 50% transparent red
             )
 
             self.sim.add(self.obstacle_sphere)
 
+            self.sim.step()
+
         # PCBF parameters
         self.T = 1  # Prediction horizon
         self.m = 0.001  # Barrier function parameter
         self.perturb_delta = 0.01  # For numerical gradient computation
-        self.alpha = 2
+        self.alpha = 40
         self.lamda = self.alpha # for consistency, static = 0.8, dynamic = 40, predictive = 40
         self.max_joint_vel = np.pi / 4
 
@@ -102,11 +99,16 @@ class PCBFSimulation:
         for i in tqdm.tqdm(range(max_it), desc=f"{method} CBF"):
             start = time.time()
             
-            if DYNAMIC_OBSTACLE: self.update_obstacle()
+            obstacle_pos, obstacle_radius = self.get_updated_obstacle(self.t)
+            self.obstacle_pos = obstacle_pos
+            self.safety_distance = obstacle_radius
+
+            if VISUAL_SIM: 
+                self.obstacle_sphere.T = sm.SE3(self.obstacle_pos)
 
             if self.check_convergence(states[-1]): break
-            current_state = states[-1]
-                            
+
+            current_state = states[-1]                            
             u, h_value = control_method(self.t, current_state)
 
             self.h_values.append(h_value)
@@ -116,43 +118,36 @@ class PCBFSimulation:
             
             # Update state using single integrator dynamics: q_new = q + u*dt
             new_state = current_state + u * self.dt
-            states.append(new_state)
-            
+            states.append(new_state)            
             self.robot.q = new_state
-            if VISUAL_SIM:
-                self.sim.step(self.dt)
+
+            if VISUAL_SIM: self.sim.step(self.dt)
             
+            self.step_count += 1
             self.t += self.dt
 
+            # This aligns timings between different simulations (or tries to at least)
             actual_dt = time.time() - start
             if actual_dt < self.dt: time.sleep(self.dt - actual_dt)
                             
         return states, self.h_values, np.vstack(self.control_inputs)
 
-    def update_obstacle(self):
-        #"""Call once per iteration to move obstacle in z as a sine wave."""
-        #self.obstacle_pos[2] = (
-        #    self.obstacle_base_pos[2]
-        #    + self.obstacle_amplitude 
-        #    * np.sin(2*np.pi * self.obstacle_freq * self.t)
-        #)
-        #if VISUAL_SIM: self.obstacle_sphere.T = sm.SE3(self.obstacle_pos)
-
-        """Update obstacle pose and radius from recorded hand data each step."""
-        # Determine current index (clamp to last sample if needed)
-        idx = min(self.step_count, len(self.leap_hand) - 1)
-        # Update obstacle properties
-        self.obstacle_pos = self.leap_hand[idx].copy()
-        self.obstacle_radius = float(self.leap_radius[idx])
-
-        # Update visualization
-        if VISUAL_SIM:
-            # Update sphere radius and pose
-            self.obstacle_sphere.radius = self.obstacle_radius+ 0.01
-            self.obstacle_sphere.T = sm.SE3(self.obstacle_pos)
-
-        # Advance to next data sample
-        self.step_count += 1
+    def get_updated_obstacle(self, t):
+        if HAND:
+            idx = self.step_count + round((t - self.t) / self.dt)
+            
+            obstacle_pos = self.leap_hand[idx]
+            obstacle_radius = self.leap_radius[idx]
+        else:
+            obstacle_pos = self.obstacle_pos.copy()
+            obstacle_pos[2] = (
+                self.obstacle_base_pos[2]
+                + self.obstacle_amplitude 
+                * np.sin(2*np.pi * self.obstacle_freq * t)
+            )
+            obstacle_radius = self.obstacle_radius
+            
+        return obstacle_pos, obstacle_radius
 
     def h_func(self, t, state):
         """
@@ -174,13 +169,8 @@ class PCBFSimulation:
         cyl_top = tcp_pos + h_cyl * tcp_z_axis
 
         # Obstacle position
-        obstacle_pos = self.obstacle_pos.copy()
-        if DYNAMIC_OBSTACLE:
-            obstacle_pos[2] = (
-                self.obstacle_base_pos[2]
-                + self.obstacle_amplitude 
-                * np.sin(2*np.pi * self.obstacle_freq * t)
-            )
+        obstacle_pos, obstacle_radius = self.get_updated_obstacle(t)
+        self.safety_distance = obstacle_radius
 
         # Project obstacle onto cylinder axis
         axis_vec = cyl_top - tcp_pos
@@ -195,22 +185,6 @@ class PCBFSimulation:
 
         # Safety margin
         return self.safety_distance - dist_to_cylinder_surface
-
-    def old_h_func(self, t, state):
-        """
-        Computes the safety margin: the distance between the end-effector
-        and the obstacle minus the safety distance.
-        """
-        tcp_pos = self.robot.fkine(state).t
-        obstacle_pos = self.obstacle_pos.copy()
-        if DYNAMIC_OBSTACLE:
-            obstacle_pos[2] = (
-                self.obstacle_base_pos[2]
-                + self.obstacle_amplitude 
-                * np.sin(2*np.pi * self.obstacle_freq * t)
-            )
-        distance = np.linalg.norm(tcp_pos - obstacle_pos)
-        return self.safety_distance - distance
     
     def h_func_with_gradient(self, t, state):
         """Numerically computes the gradient of h with respect to the state q."""
@@ -283,7 +257,7 @@ class PCBFSimulation:
         
         return eta, dx
 
-    def fzero(self, func, t1, t2, tol=1e-5, max_iter=1000):
+    def fzero(self, func, t1, t2, tol=1e-3, rtol=1e-2, max_iter=300):
         """
         use the bisection method to find a zero of *func* in [t1, t2].
         
@@ -323,7 +297,10 @@ class PCBFSimulation:
             tau = (t1 + t2) / 2.0
             h = func(tau)
             if count > max_iter:
-                print("Failure in fzero: Maximum iterations exceeded.")
+                # Bisection failed, if h satisfies a relaxed constraint, keep it
+                if abs(h) < rtol:
+                    return tau
+                print(f"fzero failed:   h: {h}")
                 break
 
         return tau
@@ -363,9 +340,9 @@ class PCBFSimulation:
         switching_dt = 1e-4
         if M1star <= t + switching_dt or (M1star <= t + self.T + switching_dt and h_of_M1star <= 0):
             # Case iii - eqn 18
-            q_pred_plus = self.path_func(M1star + self.perturb_delta, t, state)[0]
-            h_plus_delta = self.h_func(M1star + self.perturb_delta, q_pred_plus)
-            dh_dtau = (h_plus_delta - h_of_M1star) / self.perturb_delta
+            q_pred_plus = self.path_func(M1star + self.dt, t, state)[0]
+            h_plus_delta = self.h_func(M1star + self.dt, q_pred_plus)
+            dh_dtau = (h_plus_delta - h_of_M1star) / self.dt
             dtau_dt = 1 # Because the system is of high degree
             dt = dh_dtau * dtau_dt
             du = (dh_of_tau_dx @ dp_of_tau_dx) @ g
@@ -375,9 +352,9 @@ class PCBFSimulation:
             du = (dh_of_tau_dx @ dp_of_tau_dx - dm * dR_dx) @ g
         elif M1star <= t + self.T + switching_dt and h_of_M1star > 0:
             # Case ii - eqn 17
-            q_pred_plus = self.path_func(M1star + self.perturb_delta, t, state)[0]
-            h_plus_delta = self.h_func(M1star + self.perturb_delta, q_pred_plus)
-            dh_dtau = (h_plus_delta - h_of_M1star) / self.perturb_delta
+            q_pred_plus = self.path_func(M1star + self.dt, t, state)[0]
+            h_plus_delta = self.h_func(M1star + self.dt, q_pred_plus)
+            dh_dtau = (h_plus_delta - h_of_M1star) / self.dt
             dtau_dt = 1 # For simplicity
             dt = dm + dh_dtau * dtau_dt
             du = (dh_of_tau_dx @ dp_of_tau_dx - dm * dR_dx) @ g
@@ -464,6 +441,7 @@ class PCBFSimulation:
         CBF-based velocity control for single integrator dynamics.
         Enforces: ∇h(q)·u + α·h(q) ≥ 0.
         """
+        
         h_val = self.h_func(t, state)
         _, grad_h_q = self.h_func_with_gradient(t, state)
         u_nom = self.mu_func(state)
@@ -634,6 +612,7 @@ def compare_simulations():
             color='green', s=100, label="Target")
     ax.scatter(initial_tcp[0], initial_tcp[1], initial_tcp[2],
             color='blue', s=100, label="Start")
+    
     u, v = np.mgrid[0:2*np.pi:20j, 0:np.pi:10j]
     x = obstacle_pos[0] + safety_distance * np.cos(u) * np.sin(v)
     y = obstacle_pos[1] + safety_distance * np.sin(u) * np.sin(v)

@@ -1,5 +1,4 @@
 import rclpy
-import rclpy.logging
 
 from jaka_interface.pose_conversions import *
 from jaka_interface.data_types import *
@@ -27,7 +26,9 @@ class JakaInterface(Node):
 
         if publish_state:
             self.joint_state_publisher = self.create_publisher(JointState, '/joint_states', qos_profile=1)
-            self.joint_state_publisher_timer = self.create_timer(0.05, self.joint_state_publisher_callback)
+            self.joint_state_publisher_frequency = 30 #Hz
+            self.joint_state_publisher_timer = self.create_timer(1 / self.joint_state_publisher_frequency, 
+                                                                 self.joint_state_publisher_callback)
         
     #########################################
     #                                       #

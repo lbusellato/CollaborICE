@@ -239,8 +239,26 @@ def ros_to_list(ros_pose: Pose)->list:
             ros_pose.orientation.z,
             ros_pose.orientation.w]
 
-def leap_to_jaka(leap_pose: list)->list:
-    # TODO: implement also orientation conversion
+def leap_to_jaka(leap_pose: list,
+                 R: np.ndarray= np.array([[0,-1,0], [0,0,1], [-1,0,0]]),
+                 t: np.ndarray= np.array([0.400, 0, 0.025]))->list:
+    """Converts a pose in LEAP format to JAKA format. Set the proper rotation matrix and translation vector to properly 
+    align LEAP's frame to the robot's.
+
+    Parameters
+    ----------
+    leap_pose : list
+        Target pose.
+    R : np.ndarray, optional
+        The rotation matrix from the LEAP frame to the robot frame, by default np.array([[0,-1,0], [0,0,1], [-1,0,0]])
+    t : np.ndarray, optional
+        The translation vector from LEAP frame's origin to the robot frame's origin, by default np.array([0.400, 0, 0.025])
+
+    Returns
+    -------
+    list
+        Converted pose.
+    """
     R = np.array([
         [0,-1,0],
         [0,0,1],

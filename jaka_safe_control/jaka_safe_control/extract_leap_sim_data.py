@@ -1,12 +1,13 @@
 import json
 import numpy as np
+import tqdm
 
 leap_data = open("/home/jaka/CollaborICE/LEAP/20250217-153506_leap.json")
 
 def get_hand_pos():
     hand_pos_history = []
     hand_radius_history = []
-    for l in leap_data:
+    for l in tqdm.tqdm(leap_data, desc=f"Extracting LEAP data"):
         data = json.loads(l)
         hands = data.get('hands')
         hand_radius = 0
@@ -39,13 +40,12 @@ def get_hand_pos():
         hand_radius_history.append(hand_radius)
     return hand_pos_history, hand_radius_history
 
-hand_pos = np.load('./hand_pos.npy')
-hand_radius = np.load('./hand_radius.npy')
+hand_pos, hand_radius = get_hand_pos()
 
-print(hand_pos.shape)
-print(hand_radius.shape)
+# Sample from 120Hz to 30Hz
+for i in range(len(hand_pos)): hand_pos[i][0] -= 0.375
+for i in range(len(hand_pos)): hand_pos[i][1] += 0.1
 
-import matplotlib.pyplot as plt
-
-plt.plot(hand_pos[:, 0])
-plt.show()
+# Save to file
+np.save('./hand_pos', hand_pos)
+np.save('./hand_radius', hand_radius)

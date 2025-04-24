@@ -3,7 +3,8 @@ try:
     import jkrc
 except Exception:
     from jaka_interface.exceptions import SDKNotFoundException
-    raise SDKNotFoundException('Failed to import jkrc. Did you add the path to the lib folder to both PYTHONPATH and LD_LIBRARY_PATH environment variables?')
+    raise SDKNotFoundException('Failed to import jkrc. Did you add the path to the lib folder to both PYTHONPATH and \
+                               LD_LIBRARY_PATH environment variables?')
 import numpy as np
 import os
 import roboticstoolbox as rtb
@@ -111,7 +112,9 @@ class RealRobot(BaseRobot):
     #########################################
 
     def _jog(self, aj_num: int, move_mode: MoveMode, coord_type: CoordType, jog_vel: float, pos_cmd: float)->None:
-        """Jog the robot, either in joint or Cartesian space. Note that jog will fail if the robot is close to a singularity. Also keep in mind that jog is a non-blocking function. Further commands received during motion will be discarded.
+        """Jog the robot, either in joint or Cartesian space. Note that jog will fail if the robot is close to a 
+        singularity. Also keep in mind that jog is a non-blocking function. Further commands received during motion will 
+        be discarded.
 
         Parameters
         ----------
@@ -1249,7 +1252,8 @@ class RealRobot(BaseRobot):
         else:
             if ref_pos is None:
                 ref_pos = self.get_joint_position()
-            # TODO: We use the Levenberg-Marquardt algorithm because it's the fastest without tuning parameters, perhaps we could investigate using tuned others (Gauss-Newton, Newton-Raphson) to push performance even further
+            # TODO: We use the Levenberg-Marquardt algorithm because it's the fastest without tuning parameters, perhaps 
+            # we could investigate using tuned others (Gauss-Newton, Newton-Raphson) to push performance even further
             ret = self.chain.ik_LM(jaka_to_se3(cartesian_pose), q0=ref_pos)
             return ((JAKA_ERR_CODES.ERR_KINE_INVERSE_ERR.value,) if not ret[1] else (JAKA_ERR_CODES.SUCCESS_CODE.value, ret[0]))
 
@@ -1287,8 +1291,8 @@ class RealRobot(BaseRobot):
         if self.use_jaka_kinematics:
             raise NotImplementedError('JAKA\'s SDK does not expose the Jacobian.')
         else:
-            # TODO: this is another big bottleneck, we lose about 15Hz with each call. Wiser to compute it analytically, 
-            # and store the result here.
+            # TODO: this is another big bottleneck, we lose about 15Hz with each call. A nice project would be to compute
+            # the robot's kinematics analytically (like UR did), and store the expression here.
             if joint_position is None: # Wanting the Jacobian at the current state might be implied
                 joint_position = self.get_joint_position()
             return self.chain.jacob0(joint_position)

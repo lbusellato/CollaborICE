@@ -28,12 +28,12 @@ class JAKA(Node):
 
         self.t = 0
         self.dt = 0.008
-        #self.control_loop_timer = self.create_timer(self.dt, self.control_loop) 
+        self.control_loop_timer = self.create_timer(self.dt, self.control_loop) 
 
         # CBF parameters
         gamma = 0.8
         min_hand_distance = 100
-        max_joint_velocity = 100 
+        max_joint_velocity = 20 
 
         # Parameter for the output velocity low-pass filter
         qd_smoothing_factor = 0.3
@@ -53,7 +53,7 @@ class JAKA(Node):
         
         self.home = np.array([-400, 300, 300, -np.pi, 0, -20*np.pi/180])
         self.jaka_interface.robot.disable_servo_mode()
-        #self.jaka_interface.robot.linear_move(self.home, MoveMode.ABSOLUTE, 200, True)
+        self.jaka_interface.robot.linear_move(self.home, MoveMode.ABSOLUTE, 100, True)
         self.jaka_interface.robot.enable_servo_mode()
 
         self.path_function = triangle_wave
