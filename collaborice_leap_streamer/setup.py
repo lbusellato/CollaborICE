@@ -24,6 +24,7 @@ setup(
     entry_points={
         'console_scripts': [
             'leap_streamer = collaborice_leap_streamer.collaborice_leap_streamer:main',
+            'leap_fusion = collaborice_leap_streamer.leap_fusion_desk_top:main',
         ],
     },
 )

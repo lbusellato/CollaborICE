@@ -13,7 +13,7 @@ class LeapMotionVisualizer(Node):
         # Subscribe to Leap Motion JSON topic
         self.subscription = self.create_subscription(
             String, 
-            '/sensors/leap/json', 
+            '/sensors/leapFusion/json', 
             self.leap_callback, 
             10
         )
@@ -30,6 +30,8 @@ class LeapMotionVisualizer(Node):
 
         self.fmarker_publisher = self.create_publisher(MarkerArray, '/forecasting/hand_markers', 10)
         self.flast_marker_count = 0  # Track last marker count
+
+        self.min_hand_confidence = 0.1
 
     def forecasting_callback(self, msg):
 
@@ -67,29 +69,31 @@ class LeapMotionVisualizer(Node):
             marker_id += 1
              
             for hand in hands:
-                hand_type = hand.get("hand_type", "unknown")
-                keypoints = hand.get("hand_keypoints", {})
+                # Filter out low-confidence hand detections
+                if hand.get('confidence') > self.min_hand_confidence:
+                    hand_type = hand.get("hand_type", "unknown")
+                    keypoints = hand.get("hand_keypoints", {})
 
-                # Palm Position
-                palm_pos = keypoints.get("palm_position", None)
-                if palm_pos:
-                    self.add_marker(marker_array, marker_id, palm_pos, "palm", hand_type)
-                    marker_id += 1
-
-                # Finger Joints
-                fingers = keypoints.get("fingers", {})
-                max_dist = 0           
-                for finger_name, joints in fingers.items():
-                    for joint_name, pos in joints.items():
-                        # Each finger is defined by two joints
-                        self.add_marker(marker_array, marker_id, pos['prev_joint'], f"{finger_name}_{joint_name}", hand_type)
+                    # Palm Position
+                    palm_pos = keypoints.get("palm_position", None)
+                    if palm_pos:
+                        self.add_marker(marker_array, marker_id, palm_pos, "palm", hand_type)
                         marker_id += 1
-                        dist = np.linalg.norm(np.abs(np.array(pos['prev_joint']) - np.array(palm_pos)))
-                        if dist > max_dist:
-                            max_dist = dist
-            
-                self.add_marker(marker_array, marker_id, palm_pos, "palm", hand_type, max_dist * 2, 0.3)
-                marker_id += 1
+
+                    # Finger Joints
+                    fingers = keypoints.get("fingers", {})
+                    max_dist = 0           
+                    for finger_name, joints in fingers.items():
+                        for joint_name, pos in joints.items():
+                            # Each finger is defined by two joints
+                            self.add_marker(marker_array, marker_id, pos['prev_joint'], f"{finger_name}_{joint_name}", hand_type)
+                            marker_id += 1
+                            dist = np.linalg.norm(np.abs(np.array(pos['prev_joint']) - np.array(palm_pos)))
+                            if dist > max_dist:
+                                max_dist = dist
+                
+                    self.add_marker(marker_array, marker_id, palm_pos, "palm", hand_type, max_dist * 2, 0.3)
+                    marker_id += 1
             self.last_marker_count = marker_id  # Track how many markers were added
             self.marker_publisher.publish(marker_array)
 

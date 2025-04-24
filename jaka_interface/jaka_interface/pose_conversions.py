@@ -62,11 +62,11 @@ def rpy_to_rot_matrix(rpy: list) -> list:
     cy = math.cos(yaw)
     sy = math.sin(yaw)
     # Compose the rotation matrix R = Rz(yaw) * Ry(pitch) * Rx(roll)
-    R = [
+    R = np.array([
          [cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr],
          [sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr],
          [-sp,   cp*sr,            cp*cr]
-        ]
+        ])
     return R
 
 def rot_matrix_to_rpy(R: list) -> list:

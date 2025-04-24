@@ -11,10 +11,10 @@ class LeapSubscriberNode(Node):
     def __init__(self):
         super().__init__('leap_subscriber_node')
 
-        self.declare_parameter('min_hand_confidence', 0.33)
+        self.declare_parameter('min_hand_confidence', 0.1)
         self.min_hand_confidence = self.get_parameter('min_hand_confidence').value
         
-        self.create_subscription(String, '/sensors/leap/json', self.leap_subscriber_callback, qos_profile=1)
+        self.create_subscription(String, '/sensors/leapScreen/json', self.leap_subscriber_callback, qos_profile=1)
 
         self.leap_publisher = self.create_publisher(LeapHand, '/jaka/control/hand', qos_profile=1)
         leap_freq = 120 # Hz

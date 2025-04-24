@@ -11,7 +11,7 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     cbf_arch_arg = DeclareLaunchArgument(
-        'cbf_arch', default_value='vanilla', description='Which CBF architecture to use. Choices: [\'vanilla\', \'predictive\', \'sp\']')
+        'cbf_arch', default_value='predictive', description='Which CBF architecture to use. Choices: [\'vanilla\', \'predictive\', \'sp\']')
     use_rviz_arg = DeclareLaunchArgument(
         'use_rviz', default_value='False', description='Visualize everything in RVIZ')
     use_joint_gui_arg = DeclareLaunchArgument(
@@ -87,8 +87,8 @@ def generate_launch_description():
         frame_id_arg,
         publish_rate_arg,
         tracking_mode_arg,
-        leap_streamer_node,
-        leap_subscriber_node,
+        #leap_streamer_node,
+        #leap_subscriber_node,
         cbf_arch_arg,
         use_joint_gui_arg,
         visualize_leap_arg,

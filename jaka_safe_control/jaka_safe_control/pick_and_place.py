@@ -41,7 +41,7 @@ class JAKA(Node):
         self.qd_prev = np.zeros(6)
 
         # Obstacle position
-        self.obstacle_pos_sub = self.create_subscription(String, '/sensors/leap/json', self.obstacle_callback, 1)
+        self.obstacle_pos_sub = self.create_subscription(String, '/sensors/leapScreen/json', self.obstacle_callback, 1)
         self.obstacle_pos = None
 
         #Baia:                       Pallet:
