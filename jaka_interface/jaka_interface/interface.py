@@ -3,8 +3,11 @@ import rclpy
 from jaka_interface.pose_conversions import *
 from jaka_interface.data_types import *
 from jaka_interface.real_robot import RealRobot
+from jaka_interface.simulated_robot import SimulatedRobot
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
+
+# TODO: this is basically useless. The user should take care of initializing the robot and publishing its state, if they so choose.
 
 class JakaInterface(Node):
     
@@ -13,7 +16,8 @@ class JakaInterface(Node):
                  gripper_control_id: int=0, 
                  gripper_power_supply_id: int=1, 
                  use_jaka_kinematics: bool=False,
-                 publish_state: bool=False):
+                 publish_state: bool=False,
+                 simulated: bool=False):
 
         # Init node
         super().__init__('jaka_interface_node')
@@ -22,7 +26,10 @@ class JakaInterface(Node):
         self.logger = self.get_logger()  
 
         # Create robot instance
-        self.robot = RealRobot(ip, gripper_power_supply_id, gripper_control_id, use_jaka_kinematics)
+        if not simulated:
+            self.robot = RealRobot(ip, gripper_power_supply_id, gripper_control_id, use_jaka_kinematics)
+        else:
+            self.robot = SimulatedRobot(gripper_power_supply_id, gripper_control_id)
 
         if publish_state:
             self.joint_state_publisher = self.create_publisher(JointState, '/joint_states', qos_profile=1)

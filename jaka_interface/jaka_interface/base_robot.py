@@ -6,7 +6,7 @@ from jaka_messages.msg import RobotState
 from typing import Any
 
 class BaseRobot():
-
+    
     def __init__(self):
 
         # Initialize the robot state
@@ -19,14 +19,14 @@ class BaseRobot():
         self.state.is_in_servo_mode   = False
         self.state.is_in_drag_mode    = False
 
-        # Current TCP pose
-        self.tcp_position = [0.0] * 6
-
-        # Current joint pose
-        self.joint_position = [0.0] * 6
-
     def __str__(self):
         return self.__class__.__name__
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        # only fill in if subclass has no docstring of its own
+        if cls.__doc__ is None:
+            cls.__doc__ = BaseRobot.__doc__
 
     #########################################
     #                                       #
@@ -364,7 +364,7 @@ class BaseRobot():
     
     @process_sdk_call(connected=True, update_context='state', update_attr='is_gripper_closed', update_mode=3, update_val=False)
     def close_gripper(self)->None:
-        """Close the gripper by turning on the control digital output.
+        """Close the gripper by turning on the corresponding digital output.
         """
         return self._close_gripper()
     def _close_gripper(self)->None:
@@ -1961,27 +1961,3 @@ class BaseRobot():
         return self._del_ftp_file(remote, opt)
     def _del_ftp_file(self, remote: str, opt: FTPOption)->None:
         raise NotImplementedError(f"{inspect.currentframe().f_code.co_name} is not implemented")
-    
-    #########################################
-    #                                       #
-    # Class attributes                      #
-    #                                       #
-    #########################################
-
-    @property
-    def joint_position(self)->list:
-        self._joint_position = self.get_joint_position()
-        return self._joint_position
-    
-    @joint_position.setter
-    def joint_position(self, val: list):
-        self._joint_position = val
-
-    @property
-    def tcp_position(self)->list:
-        self._tcp_position = self.get_tcp_position()
-        return self._tcp_position
-    
-    @tcp_position.setter
-    def tcp_position(self, val: list):
-        self._tcp_position = val

@@ -71,6 +71,7 @@ def process_sdk_call(connected: bool=False,
             
             ret = func(self, *args, **kwargs)
             error_code = ret[0]
+            
             # Check if the SDK returned an error
             if error_code != JAKA_ERR_CODES.SUCCESS_CODE.value: 
                 error_message = f"[{context}]: {JAKA_ERR_MSGS.get(error_code)}"
