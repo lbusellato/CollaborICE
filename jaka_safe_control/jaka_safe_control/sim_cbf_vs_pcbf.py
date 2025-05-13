@@ -12,6 +12,7 @@ import time
 VISUAL_SIM = True
 DO_PREDICTIVE = True
 HAND = True
+LINEAR_PRED = False
 
 class PCBFSimulation:
     def __init__(self):
@@ -19,7 +20,7 @@ class PCBFSimulation:
         self.t = 0
 
         # Load robot from URDF
-        urdf_path = "/home/jaka/ros2_ws/src/jaka_description/urdf/jaka_swift.urdf"
+        urdf_path = "/home/buse/collaborice_ws/src/jaka_description/urdf/jaka_swift.urdf"
         self.robot = rtb.ERobot.URDF(urdf_path)
         
         # Initial joint configuration (degrees to radians)
@@ -48,7 +49,8 @@ class PCBFSimulation:
 
         # Set up visualization
         if VISUAL_SIM:
-            self.sim = Swift() #rtb.backends.PyPlot.PyPlot()
+            self.sim = Swift()
+            
             self.sim.launch()
             self.sim.add(self.robot)
 
@@ -68,7 +70,10 @@ class PCBFSimulation:
         self.perturb_delta = 0.01  # For numerical gradient computation
         self.alpha = 40
         self.lamda = self.alpha # for consistency, static = 0.8, dynamic = 40, predictive = 40
-        self.max_joint_vel = np.pi / 4
+        self.max_joint_vel = np.pi / 2
+
+        self.smoothing = 0.5
+        self.prev_u = np.zeros(6)
 
         # Target TCP pose [x, y, z, r, p, y]
         self.tcp_target = np.array([-0.4, -0.3, 0.3, -np.pi, 0, -20*np.pi/180])
@@ -111,6 +116,9 @@ class PCBFSimulation:
             current_state = states[-1]                            
             u, h_value = control_method(self.t, current_state)
 
+            u = self.smoothing * u + (1 - self.smoothing) * self.prev_u
+            self.prev_u = u
+
             self.h_values.append(h_value)
             self.control_inputs.append(u)
             tcp_pose = self.robot.fkine(current_state).t
@@ -135,9 +143,20 @@ class PCBFSimulation:
     def get_updated_obstacle(self, t):
         if HAND:
             idx = self.step_count + round((t - self.t) / self.dt)
+
+            if LINEAR_PRED and idx >= 1:
+                # Linear prediction based on current and previous position
+                prev_idx = max(idx - 1, 0)
+                prev_pos = self.leap_hand[prev_idx]
+                curr_pos = self.leap_hand[idx]
+                velocity = (curr_pos - prev_pos) / self.dt
+                dt_future = (t - self.t)
+                obstacle_pos = curr_pos + velocity * dt_future
+            else:
+                obstacle_pos = self.leap_hand[idx]
             
-            obstacle_pos = self.leap_hand[idx]
-            obstacle_radius = self.leap_radius[idx]
+            obstacle_radius = self.leap_radius[min(idx, len(self.leap_radius) - 1)]
+
         else:
             obstacle_pos = self.obstacle_pos.copy()
             obstacle_pos[2] = (
@@ -592,40 +611,40 @@ def compare_simulations():
     ax.grid(True)
     
     # Plot end-effector trajectory comparison in 3D
-    fig = plt.figure(figsize=(10,8))
-    ax = fig.add_subplot(111, projection='3d')
+    #fig = plt.figure(figsize=(10,8))
+    #ax = fig.add_subplot(111, projection='3d')
     
     traj_vanilla = np.array([sim_vanilla.robot.fkine(state).t for state in states_vanilla])
-    if DO_PREDICTIVE: traj_predictive = np.array([sim_predictive.robot.fkine(state).t for state in states_predictive])
+    #if DO_PREDICTIVE: traj_predictive = np.array([sim_predictive.robot.fkine(state).t for state in states_predictive])
     
-    ax.scatter(traj_vanilla[:, 0], traj_vanilla[:, 1], traj_vanilla[:, 2], label="Vanilla CBF", color='blue')
-    if DO_PREDICTIVE: ax.scatter(traj_predictive[:, 0], traj_predictive[:, 1], traj_predictive[:, 2], label="Predictive CBF", color='orange')
+    #ax.scatter(traj_vanilla[:, 0], traj_vanilla[:, 1], traj_vanilla[:, 2], label="Vanilla CBF", color='blue')
+    #if DO_PREDICTIVE: ax.scatter(traj_predictive[:, 0], traj_predictive[:, 1], traj_predictive[:, 2], label="Predictive CBF", color='orange')
     
     obstacle_pos = sim_vanilla.obstacle_pos
     tcp_target = sim_vanilla.tcp_target
     safety_distance = sim_vanilla.safety_distance
     initial_tcp = sim_vanilla.initial_tcp
 
-    ax.scatter(obstacle_pos[0], obstacle_pos[1], obstacle_pos[2],
-            color='red', s=100, label="Obstacle")
-    ax.scatter(tcp_target[0], tcp_target[1], tcp_target[2],
-            color='green', s=100, label="Target")
-    ax.scatter(initial_tcp[0], initial_tcp[1], initial_tcp[2],
-            color='blue', s=100, label="Start")
+    #ax.scatter(obstacle_pos[0], obstacle_pos[1], obstacle_pos[2],
+    #        color='red', s=100, label="Obstacle")
+    #ax.scatter(tcp_target[0], tcp_target[1], tcp_target[2],
+    #        color='green', s=100, label="Target")
+    #ax.scatter(initial_tcp[0], initial_tcp[1], initial_tcp[2],
+    #        color='blue', s=100, label="Start")
     
     u, v = np.mgrid[0:2*np.pi:20j, 0:np.pi:10j]
     x = obstacle_pos[0] + safety_distance * np.cos(u) * np.sin(v)
     y = obstacle_pos[1] + safety_distance * np.sin(u) * np.sin(v)
     z = obstacle_pos[2] + safety_distance * np.cos(v)
-    ax.plot_surface(x, y, z, color='r', alpha=0.2)
+    #ax.plot_surface(x, y, z, color='r', alpha=0.2)
     
-    ax.set_xlabel("X (m)")
-    ax.set_ylabel("Y (m)")
-    ax.set_zlabel("Z (m)")
-    ax.set_title("End-Effector Trajectory Comparison")
-    ax.legend()
+    #ax.set_xlabel("X (m)")
+    #ax.set_ylabel("Y (m)")
+    #ax.set_zlabel("Z (m)")
+    #ax.set_title("End-Effector Trajectory Comparison")
+    #ax.legend()
 
-    sim_vanilla.set_axes_equal(ax)
+    #sim_vanilla.set_axes_equal(ax)
     
     plt.show(block=True)
 

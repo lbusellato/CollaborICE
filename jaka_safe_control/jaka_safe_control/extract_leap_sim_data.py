@@ -2,7 +2,7 @@ import json
 import numpy as np
 import tqdm
 
-leap_data = open("/home/jaka/CollaborICE/LEAP/20250217-153506_leap.json")
+leap_data = open("/home/buse/CollaborICE/LEAP/20250217-153506_leap.json")
 
 def get_hand_pos():
     hand_pos_history = []

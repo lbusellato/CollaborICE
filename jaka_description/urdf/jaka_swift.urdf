@@ -30,7 +30,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="/home/jaka/ros2_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_0.STL" />
+          filename="/home/buse/collaborice_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_0.STL" />
       </geometry>
       <material
         name="">
@@ -44,7 +44,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="/home/jaka/ros2_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_0.STL" />
+          filename="/home/buse/collaborice_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_0.STL" />
       </geometry>
     </collision>
   </link>
@@ -70,7 +70,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="/home/jaka/ros2_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_1.STL" />
+          filename="/home/buse/collaborice_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_1.STL" />
       </geometry>
       <material
         name="">
@@ -84,7 +84,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="/home/jaka/ros2_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_1.STL" />
+          filename="/home/buse/collaborice_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_1.STL" />
       </geometry>
     </collision>
   </link>
@@ -111,7 +111,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="/home/jaka/ros2_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_2.STL" />
+          filename="/home/buse/collaborice_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_2.STL" />
       </geometry>
       <material
         name="">
@@ -125,7 +125,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="/home/jaka/ros2_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_2.STL" />
+          filename="/home/buse/collaborice_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_2.STL" />
       </geometry>
     </collision>
   </link>
@@ -152,7 +152,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="/home/jaka/ros2_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_3.STL" />
+          filename="/home/buse/collaborice_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_3.STL" />
       </geometry>
       <material
         name="">
@@ -166,7 +166,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="/home/jaka/ros2_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_3.STL" />
+          filename="/home/buse/collaborice_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_3.STL" />
       </geometry>
     </collision>
   </link>
@@ -193,7 +193,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="/home/jaka/ros2_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_4.STL" />
+          filename="/home/buse/collaborice_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_4.STL" />
       </geometry>
       <material
         name="">
@@ -207,7 +207,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="/home/jaka/ros2_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_4.STL" />
+          filename="/home/buse/collaborice_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_4.STL" />
       </geometry>
     </collision>
   </link>
@@ -234,7 +234,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="/home/jaka/ros2_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_5.STL" />
+          filename="/home/buse/collaborice_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_5.STL" />
       </geometry>
       <material
         name="">
@@ -248,7 +248,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="/home/jaka/ros2_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_5.STL" />
+          filename="/home/buse/collaborice_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_5.STL" />
       </geometry>
     </collision>
   </link>
@@ -275,7 +275,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="/home/jaka/ros2_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_6.STL" />
+          filename="/home/buse/collaborice_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_6.STL" />
       </geometry>
       <material
         name="">
@@ -289,7 +289,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="/home/jaka/ros2_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_6.STL" />
+          filename="/home/buse/collaborice_ws/src/jaka_description/meshes/jaka_zu5_meshes/Link_6.STL" />
       </geometry>
     </collision>
   </link>
