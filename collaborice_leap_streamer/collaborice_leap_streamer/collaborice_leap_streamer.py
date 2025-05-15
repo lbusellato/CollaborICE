@@ -13,7 +13,7 @@ from std_msgs.msg import Header, String
 class LeapMotionPublisher(Node):
     def __init__(self):
         super().__init__('leapmotion_publisher')
-        self.publisher_ = self.create_publisher(String, '/sensors/leapScreen/json', 1)
+        self.publisher_ = self.create_publisher(String, '/sensors/leapDesk/json', 1)
         # self.timer = self.create_timer(0.1, self.publish_joints)
         self.connection = leap.Connection()
         self.listener = MyListener(self.get_logger(), self.publisher_, self)
@@ -21,7 +21,7 @@ class LeapMotionPublisher(Node):
 
         with self.connection.open():
             #    print("Connected")
-            self.connection.set_tracking_mode(leap.TrackingMode.ScreenTop)
+            self.connection.set_tracking_mode(leap.TrackingMode.Desktop)
             while True:
                 time.sleep(1)
 

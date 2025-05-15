@@ -40,9 +40,9 @@ class JAKA(Node):
 
         # Hand position
         self.hand_pos_sub = self.create_subscription(LeapHand, '/jaka/control/hand', self.leap_hand_callback, 1)
-        self.hand_pos = None
-        self.hand_radius = 0
-
+        self.hand_pos = np.array([-0.4, 0.0, 0.3])
+        self.hand_radius = 0.05
+        
         # Controller
         self.controller = VanillaSafeController(self.jaka_interface.robot, 
                                                 gamma,

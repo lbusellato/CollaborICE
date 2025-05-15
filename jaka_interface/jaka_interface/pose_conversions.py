@@ -241,7 +241,7 @@ def ros_to_list(ros_pose: Pose)->list:
 
 def leap_to_jaka(leap_pose: list,
                  R: np.ndarray= np.array([[0,-1,0], [0,0,1], [-1,0,0]]),
-                 t: np.ndarray= np.array([0.400, 0, 0.025]))->list:
+                 t: np.ndarray= np.array([0.475, -0.375, 0.01]))->np.ndarray:
     """Converts a pose in LEAP format to JAKA format. Set the proper rotation matrix and translation vector to properly 
     align LEAP's frame to the robot's.
 
@@ -256,13 +256,7 @@ def leap_to_jaka(leap_pose: list,
 
     Returns
     -------
-    list
+    np.ndarray
         Converted pose.
     """
-    R = np.array([
-        [0,-1,0],
-        [0,0,1],
-        [-1,0,0]])
-    t = np.array([0.400, 0, 0.025])
-    position = leap_pose[:3]
-    return (((np.array(position)) @ R) - t) * 1000
+    return (((np.array(leap_pose[:3])) @ R) - t) * 1000

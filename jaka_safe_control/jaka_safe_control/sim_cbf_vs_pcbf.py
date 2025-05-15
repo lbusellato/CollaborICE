@@ -5,13 +5,44 @@ from scipy.optimize import minimize_scalar
 import matplotlib.pyplot as plt
 import tqdm
 from roboticstoolbox.backends.swift import Swift
+from roboticstoolbox.backends.PyPlot import PyPlot
 import spatialgeometry as sg
 import spatialmath as sm    
 import time
+import math
 
 VISUAL_SIM = True
 DO_PREDICTIVE = True
 HAND = True
+LINEAR_PRED = True
+
+def rpy_to_rot_matrix(rpy: list) -> list:
+    """Convert RPY angles to a rotation matrix.
+
+    Parameters
+    ----------
+    rpy : list
+        The xyz roll, pitch and yaw.
+
+    Returns
+    -------
+    list
+        The corresponding ZYX rotation matrix
+    """
+    roll, pitch, yaw = rpy
+    cr = math.cos(roll)
+    sr = math.sin(roll)
+    cp = math.cos(pitch)
+    sp = math.sin(pitch)
+    cy = math.cos(yaw)
+    sy = math.sin(yaw)
+    # Compose the rotation matrix R = Rz(yaw) * Ry(pitch) * Rx(roll)
+    R = np.array([
+         [cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr],
+         [sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr],
+         [-sp,   cp*sr,            cp*cr]
+        ])
+    return R
 
 class PCBFSimulation:
     def __init__(self):
@@ -46,33 +77,56 @@ class PCBFSimulation:
         self.obstacle_amplitude = 0.05    # meters
         self.obstacle_freq      = 0.25    # Hz (i.e. one full up-down every 2s)
 
+        # Workspace definition
+        self.workspace_limits = {
+            'x_min': -0.5, 'x_max': 0.1, # don't hit the operator/camera rig
+            'y_min': -0.5, 'y_max': 0.7, # don't hit the milling
+            'z_min':  0.3           # don't go below table height
+        }
+
+        self.cyl_radius = 0.045
+        self.cyl_height = 0.35
+
         # Set up visualization
         if VISUAL_SIM:
-            self.sim = Swift() #rtb.backends.PyPlot.PyPlot()
+            self.sim = Swift()
+            
             self.sim.launch()
             self.sim.add(self.robot)
 
             self.obstacle_sphere = sg.Sphere(
                 radius=self.obstacle_radius, 
                 pose=sm.SE3(self.obstacle_pos), 
-                color=[1, 0, 0, 0.5]  # RGBA, 50% transparent red
+                color=[0, 0, 1, 0.5]  # RGBA, 50% transparent red
             )
 
-            self.sim.add(self.obstacle_sphere)
 
+            self.sim.add(self.obstacle_sphere)
+            
+            # add EE cylinder (initial pose at origin)
+            self.ee_cyl_vis = sg.Cylinder(
+                radius=self.cyl_radius, 
+                length=self.cyl_height, 
+                color=[0.0,1.0,0.0,0.3])
+
+            self.sim.add(self.ee_cyl_vis)
+            
             self.sim.step()
 
         # PCBF parameters
         self.T = 1  # Prediction horizon
-        self.m = 0.001  # Barrier function parameter
+        self.m = 1e-4  # Barrier function parameter
         self.perturb_delta = 0.01  # For numerical gradient computation
         self.alpha = 40
         self.lamda = self.alpha # for consistency, static = 0.8, dynamic = 40, predictive = 40
-        self.max_joint_vel = np.pi / 4
+        self.max_joint_vel = np.pi / 2
+
+        self.smoothing = 0.5
+        self.prev_u = np.zeros(6)
 
         # Target TCP pose [x, y, z, r, p, y]
         self.tcp_target = np.array([-0.4, -0.3, 0.3, -np.pi, 0, -20*np.pi/180])
-        
+
         # Control parameters
         self.pos_tolerance = 2e-3
         self.rot_tolerance = 1e-1
@@ -103,13 +157,13 @@ class PCBFSimulation:
             self.obstacle_pos = obstacle_pos
             self.safety_distance = obstacle_radius
 
-            if VISUAL_SIM: 
-                self.obstacle_sphere.T = sm.SE3(self.obstacle_pos)
-
             if self.check_convergence(states[-1]): break
 
             current_state = states[-1]                            
-            u, h_value = control_method(self.t, current_state)
+            u, h_value = control_method(self.t, current_state)   
+
+            u = self.smoothing * u + (1 - self.smoothing) * self.prev_u
+            self.prev_u = u
 
             self.h_values.append(h_value)
             self.control_inputs.append(u)
@@ -121,7 +175,16 @@ class PCBFSimulation:
             states.append(new_state)            
             self.robot.q = new_state
 
-            if VISUAL_SIM: self.sim.step(self.dt)
+
+            if VISUAL_SIM: 
+
+                self.obstacle_sphere.T = sm.SE3(self.obstacle_pos)
+                # use the *new* state, and take the full SE3 (rotation+translation)
+                offset = sm.SE3(0, 0, -self.cyl_height/2.0)
+                
+                ee_pose = self.robot.fkine(self.robot.q)        # this is an SE3 object already
+                self.ee_cyl_vis.T = ee_pose * offset                    # preserves both R and t
+                self.sim.step(self.dt)
             
             self.step_count += 1
             self.t += self.dt
@@ -135,9 +198,20 @@ class PCBFSimulation:
     def get_updated_obstacle(self, t):
         if HAND:
             idx = self.step_count + round((t - self.t) / self.dt)
+
+            if LINEAR_PRED and idx >= 1:
+                # Linear prediction based on current and previous position
+                prev_idx = max(idx - 1, 0)
+                prev_pos = self.leap_hand[prev_idx]
+                curr_pos = self.leap_hand[idx]
+                velocity = (curr_pos - prev_pos) / self.dt
+                dt_future = (t - self.t)
+                obstacle_pos = curr_pos + velocity * dt_future
+            else:
+                obstacle_pos = self.leap_hand[idx]
             
-            obstacle_pos = self.leap_hand[idx]
-            obstacle_radius = self.leap_radius[idx]
+            obstacle_radius = self.leap_radius[min(idx, len(self.leap_radius) - 1)]
+
         else:
             obstacle_pos = self.obstacle_pos.copy()
             obstacle_pos[2] = (
@@ -158,7 +232,7 @@ class PCBFSimulation:
         """
         # EE shape
         r_cyl = 0.045  # cylinder radius [m]
-        h_cyl = -0.35   # cylinder height [m]
+        h_cyl = 0.35   # cylinder height [m]
 
         # TCP pose and orientation
         tcp_pose = self.robot.fkine(state)
@@ -166,7 +240,7 @@ class PCBFSimulation:
         tcp_z_axis = tcp_pose.R[:, 2]  # z-axis of EE
 
         # Endpoint of cylinder axis
-        cyl_top = tcp_pos + h_cyl * tcp_z_axis
+        cyl_top = tcp_pos - h_cyl * tcp_z_axis
 
         # Obstacle position
         obstacle_pos, obstacle_radius = self.get_updated_obstacle(t)
@@ -401,6 +475,46 @@ class PCBFSimulation:
         
         return q_dot_des
     
+    def solve_qp(self, u_nom, q, A, b, P=np.eye(6), F=np.zeros(6)):
+        
+        u = cp.Variable(self.n_joints)
+
+        objective = cp.Minimize(0.5 * cp.quad_form(u, P) + F @ u)
+
+        J_cart = self.robot.jacob0(q)
+        tcp_pos = self.robot.fkine(q).t
+
+
+        ws = self.workspace_limits
+        dt = self.dt
+
+        constraints = [
+            A @ u <= b,                                             # CBF constraint
+            u >= -self.max_joint_vel,                               # max velocity constraint
+            u <= self.max_joint_vel,                                # max velocity constraint
+            J_cart[0, :] @ u <= (ws['x_max'] - tcp_pos[0]) / dt,    # x max workspace limit
+            -J_cart[0, :] @ u <= (tcp_pos[0] - ws['x_min']) / dt,   # x min workspace limit
+            J_cart[1, :] @ u <= (ws['y_max'] - tcp_pos[1]) / dt,    # y max workspace limit
+            -J_cart[1, :] @ u <= (tcp_pos[1] - ws['y_min']) / dt,   # y min workspace limit
+            -J_cart[2, :] @ u <= (tcp_pos[2] - ws['z_min']) / dt,   # z min workspace limit
+            ]
+        
+        problem = cp.Problem(objective, constraints)
+
+        u_safe = np.zeros(self.n_joints)
+        try:
+            problem.solve(solver=cp.OSQP)
+            if u.value is None or np.any(np.isnan(u.value)):
+                print("QP failed")
+            else:
+                u_safe = u.value
+        except Exception as e:
+            print(f"QP solver error: {e}")
+
+        u = u_nom + u_safe
+            
+        return u
+
     def calculate_u_pcbf(self, t, state):
         """
         Calculates the safe velocity command using a QP with the predictive CBF constraint.
@@ -409,32 +523,13 @@ class PCBFSimulation:
         H, dHdt, dHdu = self.hstar_func(t, state)
         h_val = self.h_func(t, state)
         u_nom = self.mu_func(state)
-        
-        J = np.eye(self.n_joints)
-        F = np.zeros(self.n_joints)
-        
+                
         A = dHdu
         b = - self.alpha * H - dHdt
         
-        u = cp.Variable(self.n_joints)
-        objective = cp.Minimize(0.5 * cp.quad_form(u, J) + F @ u)
-        constraints = [A @ u <= b,
-            u >= -self.max_joint_vel,
-            u <= self.max_joint_vel]
-        
-        problem = cp.Problem(objective, constraints)
-        try:
-            problem.solve(solver=cp.OSQP)
-            if u.value is None or np.any(np.isnan(u.value)):
-                print("QP failed, using nominal control")
-                u_safe = u_nom
-            else:
-                u_safe = u.value + u_nom
-        except Exception as e:
-            print(f"QP solver error: {e}")
-            u_safe = u_nom
+        u = self.solve_qp(u_nom, state, A, b)
             
-        return u_safe, h_val
+        return u, h_val
     
     def calculate_u_cbf(self, t, state):
         """
@@ -442,32 +537,15 @@ class PCBFSimulation:
         Enforces: ∇h(q)·u + α·h(q) ≥ 0.
         """
         
-        h_val = self.h_func(t, state)
-        _, grad_h_q = self.h_func_with_gradient(t, state)
+        h_val, grad_h_q = self.h_func_with_gradient(t, state)
         u_nom = self.mu_func(state)
         
-        b_rhs = -self.lamda * h_val
+        A = grad_h_q
+        b = -self.lamda * h_val
+
+        u = self.solve_qp(u_nom, state, A, b)
         
-        J = np.eye(self.n_joints)
-        F = -u_nom
-        
-        u = cp.Variable(self.n_joints)
-        objective = cp.Minimize(0.5 * cp.quad_form(u, J) + F.T @ u)
-        constraints = [grad_h_q.reshape(1, self.n_joints) @ u <= b_rhs]
-        
-        problem = cp.Problem(objective, constraints)
-        try:
-            problem.solve(solver=cp.OSQP)
-            if u.value is None or np.any(np.isnan(u.value)):
-                print("QP failed, using nominal control")
-                u_safe = u_nom
-            else:
-                u_safe = u.value
-        except Exception as e:
-            print(f"QP solver error: {e}")
-            u_safe = u_nom
-        
-        return u_safe, h_val
+        return u, h_val
     
     def check_convergence(self, state):
         """Checks if the end-effector is close enough to the target."""
@@ -592,40 +670,40 @@ def compare_simulations():
     ax.grid(True)
     
     # Plot end-effector trajectory comparison in 3D
-    fig = plt.figure(figsize=(10,8))
-    ax = fig.add_subplot(111, projection='3d')
+    #fig = plt.figure(figsize=(10,8))
+    #ax = fig.add_subplot(111, projection='3d')
     
     traj_vanilla = np.array([sim_vanilla.robot.fkine(state).t for state in states_vanilla])
-    if DO_PREDICTIVE: traj_predictive = np.array([sim_predictive.robot.fkine(state).t for state in states_predictive])
+    #if DO_PREDICTIVE: traj_predictive = np.array([sim_predictive.robot.fkine(state).t for state in states_predictive])
     
-    ax.scatter(traj_vanilla[:, 0], traj_vanilla[:, 1], traj_vanilla[:, 2], label="Vanilla CBF", color='blue')
-    if DO_PREDICTIVE: ax.scatter(traj_predictive[:, 0], traj_predictive[:, 1], traj_predictive[:, 2], label="Predictive CBF", color='orange')
+    #ax.scatter(traj_vanilla[:, 0], traj_vanilla[:, 1], traj_vanilla[:, 2], label="Vanilla CBF", color='blue')
+    #if DO_PREDICTIVE: ax.scatter(traj_predictive[:, 0], traj_predictive[:, 1], traj_predictive[:, 2], label="Predictive CBF", color='orange')
     
     obstacle_pos = sim_vanilla.obstacle_pos
     tcp_target = sim_vanilla.tcp_target
     safety_distance = sim_vanilla.safety_distance
     initial_tcp = sim_vanilla.initial_tcp
 
-    ax.scatter(obstacle_pos[0], obstacle_pos[1], obstacle_pos[2],
-            color='red', s=100, label="Obstacle")
-    ax.scatter(tcp_target[0], tcp_target[1], tcp_target[2],
-            color='green', s=100, label="Target")
-    ax.scatter(initial_tcp[0], initial_tcp[1], initial_tcp[2],
-            color='blue', s=100, label="Start")
+    #ax.scatter(obstacle_pos[0], obstacle_pos[1], obstacle_pos[2],
+    #        color='red', s=100, label="Obstacle")
+    #ax.scatter(tcp_target[0], tcp_target[1], tcp_target[2],
+    #        color='green', s=100, label="Target")
+    #ax.scatter(initial_tcp[0], initial_tcp[1], initial_tcp[2],
+    #        color='blue', s=100, label="Start")
     
     u, v = np.mgrid[0:2*np.pi:20j, 0:np.pi:10j]
     x = obstacle_pos[0] + safety_distance * np.cos(u) * np.sin(v)
     y = obstacle_pos[1] + safety_distance * np.sin(u) * np.sin(v)
     z = obstacle_pos[2] + safety_distance * np.cos(v)
-    ax.plot_surface(x, y, z, color='r', alpha=0.2)
+    #ax.plot_surface(x, y, z, color='r', alpha=0.2)
     
-    ax.set_xlabel("X (m)")
-    ax.set_ylabel("Y (m)")
-    ax.set_zlabel("Z (m)")
-    ax.set_title("End-Effector Trajectory Comparison")
-    ax.legend()
+    #ax.set_xlabel("X (m)")
+    #ax.set_ylabel("Y (m)")
+    #ax.set_zlabel("Z (m)")
+    #ax.set_title("End-Effector Trajectory Comparison")
+    #ax.legend()
 
-    sim_vanilla.set_axes_equal(ax)
+    #sim_vanilla.set_axes_equal(ax)
     
     plt.show(block=True)
 

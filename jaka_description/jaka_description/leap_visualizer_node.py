@@ -3,6 +3,7 @@ from rclpy.node import Node
 import json
 from std_msgs.msg import String
 from visualization_msgs.msg import Marker, MarkerArray
+from jaka_interface.pose_conversions import leap_to_jaka
 from geometry_msgs.msg import Point
 import numpy as np
 
@@ -13,12 +14,12 @@ class LeapMotionVisualizer(Node):
         # Subscribe to Leap Motion JSON topic
         self.subscription = self.create_subscription(
             String, 
-            '/sensors/leapFusion/json', 
+            '/sensors/leapScreen/json', 
             self.leap_callback, 
             10
         )
         self.subscription_ = self.create_subscription(
-            String, 
+            String,     
             '/applications/hand_forecasting', 
             self.forecasting_callback, 
             10
@@ -65,7 +66,7 @@ class LeapMotionVisualizer(Node):
                 return  
 
             marker_id = 0
-            self.add_marker(marker_array, marker_id, np.array([0, -0.025, 0.4])  , "leap", "", 0.05)
+            self.add_marker(marker_array, marker_id, [0,0,0], "leap", "", 0.05)
             marker_id += 1
              
             for hand in hands:
@@ -100,14 +101,6 @@ class LeapMotionVisualizer(Node):
         except json.JSONDecodeError:
             self.get_logger().error("Failed to parse Leap Motion JSON data.")
 
-    def leap_position_to_robot_world(self, position):
-        R = np.array([
-            [0,-1,0],
-            [0,0,1],
-            [-1,0,0]])
-        t = np.array([0.400, 0, 0.025])
-        return ((np.array(position)) @ R) - t
-
     def add_marker(self, marker_array, marker_id, pos, joint_name, hand_type, scale=0.02, alpha=1.0, rgb=None):
         """Creates and adds a sphere marker for RViz visualization."""
         marker = Marker()
@@ -117,7 +110,7 @@ class LeapMotionVisualizer(Node):
         marker.id = marker_id
         marker.type = Marker.SPHERE
         marker.action = Marker.ADD
-        pos = self.leap_position_to_robot_world(pos)
+        pos = leap_to_jaka(pos)/1000
         marker.pose.position = Point(x=pos[0], y=pos[1], z=pos[2])
         marker.pose.orientation.w = 1.0
         marker.scale.x = scale  # Sphere size (2 cm)

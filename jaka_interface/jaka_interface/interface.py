@@ -59,7 +59,7 @@ class JakaInterface(Node):
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.name = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
-        msg.position = self.robot.joint_position
+        msg.position = self.robot.get_joint_position()
         self.joint_state_publisher.publish(msg)
     
 def main():

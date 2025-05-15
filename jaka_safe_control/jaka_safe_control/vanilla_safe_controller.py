@@ -24,8 +24,8 @@ class VanillaSafeController():
         self.H = np.eye(6)
 
     def update(self, q_des: np.ndarray, obs_pos: np.ndarray, obs_radius: float)->np.ndarray:
-        q = np.array(self.robot.joint_position)
-        tcp = np.array(self.robot.tcp_position)[:3]
+        q = np.array(self.robot.get_joint_position())
+        tcp = np.array(self.robot.get_tcp_position())[:3]
 
         qd_out = (q_des - q) / self.dt
 

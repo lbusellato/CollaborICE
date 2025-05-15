@@ -8,10 +8,11 @@ from scipy.optimize import minimize_scalar
 class PredictiveSafeController():
     def __init__(self,
                  robot_instance: RealRobot,
-                 cbf_gamma: float = 1,
-                 max_joint_velocity: float = 0.1,
+                 cbf_gamma: float = 0.8,
+                 max_joint_velocity: float = np.pi / 4,
                  prediction_horizon: float = 1,
-                 dt: float = 0.01):
+                 dt: float = 0.008,
+                 logger=None):
         self.robot = robot_instance
         
         self.cbf_gamma = cbf_gamma
@@ -20,12 +21,12 @@ class PredictiveSafeController():
         self.T = prediction_horizon
         
         self.perturb_delta = 0.01
-        self.m = 0.001
+        self.m = 1
 
         self.dt = dt
 
-        self.hand_pos = np.array([0.0, 0.0, 0.0])
-        self.hand_radius = 0.1
+        self.hand_pos = np.array([-0.4, 0.0, 0.3])
+        self.hand_radius = 0.05
 
         self.safety_distance = self.hand_radius
 
@@ -35,10 +36,21 @@ class PredictiveSafeController():
         self.tcp_target = np.array([-0.4, -0.3, 0.3, -np.pi, 0, -20*np.pi/180])
         
         # Control parameters
-        self.pos_tolerance = 2e-3
+        self.pos_tolerance = 1e-3
         self.rot_tolerance = 1e-1
-        self.pos_gain = 1  # position gain
-        self.rot_gain = 1  # orientation gain
+        self.KP_pos = 1  # position gain
+        self.KP_rot = 1  # orientation gain
+
+        self.tau_smooth = 0.1   # [s], try values 0.05…0.3
+        self.u_prev     = np.zeros(self.n_joints)
+
+        self.KI_pos       = self.KP_pos / 20      # [1/s²], tune to get the finish speed you like
+        self.KI_rot       = self.KP_rot / 20      # [1/s²]
+        self.integral_pos = np.zeros(3)
+        self.integral_rot = np.zeros(3)
+        self.integral_max = 0.2  
+        
+        self.logger = logger
 
     def update(self, t, hand_pos)->np.ndarray:
         """
@@ -46,13 +58,12 @@ class PredictiveSafeController():
         The constraint is: dhstar_dt + dhstar_du·u + α·hstar ≥ 0.
         """
         
-        self.hand_pos = hand_pos if hand_pos is not None else np.zeros(3)
+        self.hand_pos = hand_pos if hand_pos is not None else 10000 * np.ones(3)
 
-        state = np.array(self.robot.joint_position)
-        H, dHdt, dHdu = self.hstar_func(t, state)
-        #h_val = self.h_func(t, state)
-        u_nom = self.mu_func(state)
-        
+        state = np.array(self.robot.get_joint_position())
+        u_nom = self.mu_func(state, t)
+        H, dHdt, dHdu = self.hstar_func(t, state, u_nom)
+
         J = np.eye(self.n_joints)
         F = np.zeros(self.n_joints)
         
@@ -69,15 +80,55 @@ class PredictiveSafeController():
         try:
             problem.solve(solver=cp.OSQP)
             if u.value is None or np.any(np.isnan(u.value)):
+                self.logger.info("QP failed, using nominal control")
+                violations = A @ u_nom - b    # vector of how much each row exceeds b
+                worst = np.max(violations)
+                self.logger.info(f"max(Au_nom–b) = {worst:.4f}")
+                u_safe = u_nom
+            else:
+                #self.logger.info(f"{u.value} contro {u_nom} con mano a {hand_pos}")
+                u_safe = u.value + u_nom
+        except Exception as e:
+            self.logger.info(f"QP solver error: {e}")
+            u_safe = u_nom
+            
+        return u_safe
+    
+    def update_w_cbf(self, t, hand_pos):
+        """
+        CBF-based velocity control for single integrator dynamics.
+        Enforces: ∇h(q)·u + α·h(q) ≥ 0.
+        """
+        
+        self.hand_pos = hand_pos if hand_pos is not None else 10000 * np.ones(3)
+
+        state = np.array(self.robot.get_joint_position())
+
+        h_val = self.h_func(t, state)
+        _, grad_h_q = self.h_func_with_gradient(t, state)
+        u_nom = self.mu_func(state, t)
+        
+        b_rhs = -self.cbf_gamma * h_val
+        
+        J = np.eye(self.n_joints)
+        F = np.zeros(self.n_joints)
+        
+        u = cp.Variable(self.n_joints)
+        objective = cp.Minimize(0.5 * cp.quad_form(u, J) + F.T @ u)
+        constraints = [grad_h_q.reshape(1, self.n_joints) @ u <= b_rhs]
+        
+        problem = cp.Problem(objective, constraints)
+        try:
+            problem.solve(solver=cp.OSQP)
+            if u.value is None or np.any(np.isnan(u.value)):
                 print("QP failed, using nominal control")
                 u_safe = u_nom
             else:
-                #print(f"{u.value} contro {u_nom} con mano a {hand_pos}")
                 u_safe = u.value + u_nom
         except Exception as e:
             print(f"QP solver error: {e}")
             u_safe = u_nom
-
+        
         return u_safe
 
     def get_updated_hand(self, t):
@@ -130,6 +181,7 @@ class PredictiveSafeController():
         for i in range(self.state_len):
             state_plus = state.copy()
             state_minus = state.copy()
+            self.logger.info(f"{state}")
             state_plus[i] += self.perturb_delta
             state_minus[i] -= self.perturb_delta
             h_plus = self.h_func(t, state_plus)
@@ -137,25 +189,24 @@ class PredictiveSafeController():
             dh[i] = (h_plus - h_minus) / (2 * self.perturb_delta)
         return h_val, dh
     
-    def path_func(self, tau, t, state):
+    def path_func(self, tau, t, q, u_nom):
         """
         Predicts the state at time tau using single integrator dynamics:
         q_pred = q + u_nom * (tau - t)
         Returns the predicted state, its derivative with respect to tau,
         derivative with respect to t, and the identity derivative w.r.t. state.
         """
-        delta_t = tau - t
-        u_nom = self.mu_func(state)
-        q = state
-        q_pred = q + u_nom * delta_t
+        p = q + u_nom * (tau - t) 
+        # TODO not really the correct prediction, just a linear propagation of the current command. Would be cool to 
+        # have a "co-forecasting" model...
         
         dp_dtau = u_nom      # ∂q_pred/∂tau
         dp_dt = -u_nom       # ∂q_pred/∂t
         dx = np.eye(self.state_len)  # ∂q_pred/∂q
         
-        return q_pred, dp_dtau, dp_dt, dx
+        return p, dp_dtau, dp_dt, dx
     
-    def find_max(self, t, state):
+    def find_max(self, t, state, u_nom):
         """
         Finds the time tau within [t, t+T] that maximizes the safety margin h.
         Returns tau, the corresponding h value, and an approximate derivative dtau_dx.
@@ -163,7 +214,7 @@ class PredictiveSafeController():
                 
         # Solve the optimization using trust-constr with the zero Hessian.
         result = minimize_scalar(
-            lambda tau: -self.h_func(tau, self.path_func(tau, t, state)[0]),
+            lambda tau: -self.h_func(tau, self.path_func(tau, t, state, u_nom)[0]),
             bounds=[t, t + self.T],
         )
         tau = result.x
@@ -175,7 +226,7 @@ class PredictiveSafeController():
             state_perturbed = state.copy()
             state_perturbed[i] += self.perturb_delta
             result_perturbed = minimize_scalar(
-                lambda tau: -self.h_func(tau, self.path_func(tau, t, state_perturbed)[0]),
+                lambda tau: -self.h_func(tau, self.path_func(tau, t, state_perturbed, u_nom)[0]),
                 bounds=[t, t + self.T],
             )
             tau_perturbed = result_perturbed.x
@@ -183,12 +234,12 @@ class PredictiveSafeController():
 
         return tau, h_of_tau, dtau_dx
     
-    def find_zero(self, tau, t, x):
-        f = lambda z: self.h_func(z, self.path_func(z, t, x)[0])
+    def find_zero(self, tau, t, x, u_nom):
+        f = lambda z: self.h_func(z, self.path_func(z, t, x, u_nom)[0])
         
         eta = self.fzero(f, t, tau)
 
-        p, dp_dtau, _, dp_dx = self.path_func(eta, t, x)
+        p, dp_dtau, _, dp_dx = self.path_func(eta, t, x, u_nom)
         _, dh = self.h_func_with_gradient(tau, p)
         dx = -dh @ dp_dx / (dh @ dp_dtau)
         
@@ -218,6 +269,7 @@ class PredictiveSafeController():
             # If the function at the left end is above zero, return t1 as a trivial solution.
             return t1
         elif h2 < 0:
+            return t2
             raise ValueError("Invalid bounds: func(t1) and func(t2) do not bracket a root.")
 
         # Begin bisection
@@ -237,7 +289,7 @@ class PredictiveSafeController():
                 # Bisection failed, if h satisfies a relaxed constraint, keep it
                 if abs(h) < rtol:
                     return tau
-                print(f"fzero failed:   h: {h}")
+                self.logger.info(f"fzero failed:   h: {h}")
                 break
 
         return tau
@@ -247,20 +299,20 @@ class PredictiveSafeController():
         dm_val = 2 * self.m * lambda_val
         return m_val, dm_val
     
-    def hstar_func(self, t, state):
+    def hstar_func(self, t, state, u_nom):
         """
         Computes the predictive CBF value h* and its derivatives for the single integrator (velocity control) case.
         """
 
         # Find first local maxima of h over the time horizon
-        M1star, h_of_M1star, dM1star_dx = self.find_max(t, state)
+        M1star, h_of_M1star, dM1star_dx = self.find_max(t, state, u_nom)
 
         # R(tau, t, x)   eqn 9        
         if h_of_M1star <= 0: # First local maxima is safe (eqn 9, case 2)
             R = M1star 
             dR_dx = dM1star_dx
         else: # First local maxima is unsafe, compute root of h before it
-            R, dR_dx = self.find_zero(M1star, t, state)
+            R, dR_dx = self.find_zero(M1star, t, state, u_nom)
             if np.linalg.norm(dR_dx) >= 10 * np.linalg.norm(dM1star_dx):
                 # Switch to M1star when the derivative gets too large
                 dR_dx = dM1star_dx
@@ -269,7 +321,7 @@ class PredictiveSafeController():
 
         hstar = h_of_M1star - m
 
-        predicted_state, _, _, dp_of_tau_dx = self.path_func(M1star, t, state)
+        predicted_state, _, _, dp_of_tau_dx = self.path_func(M1star, t, state, u_nom)
         _, dh_of_tau_dx = self.h_func_with_gradient(M1star, predicted_state)
 
         g = np.eye(6) # Single integrator model
@@ -277,7 +329,7 @@ class PredictiveSafeController():
         switching_dt = 1e-4
         if M1star <= t + switching_dt or (M1star <= t + self.T + switching_dt and h_of_M1star <= 0):
             # Case iii - eqn 18
-            q_pred_plus = self.path_func(M1star + self.dt, t, state)[0]
+            q_pred_plus = self.path_func(M1star + self.dt, t, state, u_nom)[0]
             h_plus_delta = self.h_func(M1star + self.dt, q_pred_plus)
             dh_dtau = (h_plus_delta - h_of_M1star) / self.dt
             dtau_dt = 1 # Because the system is of high degree
@@ -289,51 +341,64 @@ class PredictiveSafeController():
             du = (dh_of_tau_dx @ dp_of_tau_dx - dm * dR_dx) @ g
         elif M1star <= t + self.T + switching_dt and h_of_M1star > 0:
             # Case ii - eqn 17
-            q_pred_plus = self.path_func(M1star + self.dt, t, state)[0]
+            q_pred_plus = self.path_func(M1star + self.dt, t, state, u_nom)[0]
             h_plus_delta = self.h_func(M1star + self.dt, q_pred_plus)
             dh_dtau = (h_plus_delta - h_of_M1star) / self.dt
             dtau_dt = 1 # For simplicity
             dt = dm + dh_dtau * dtau_dt
             du = (dh_of_tau_dx @ dp_of_tau_dx - dm * dR_dx) @ g
         else:
-            print("Warning: m1star > t+T")
+            self.logger.info("Warning: m1star > t+T")
             dt = 0
             du = np.zeros(self.state_len)
         
         return hstar, dt, du
-    
-    def mu_func(self, state):
+        
+    def mu_func(self, state: np.ndarray, t: float) -> np.ndarray:
         """
-        Nominal control law for velocity control.
-        Uses a task-space proportional controller to generate a joint velocity command.
+        PI‐controller on Cartesian error + 1st‐order filter on joint‐vel.
         """
-        q = state
-        current_pose = self.robot.kine_forward(q)
-        current_pos = current_pose.t
-        target_pos = self.tcp_target[:3]
-        pos_error = target_pos - current_pos
-        pos_error_mag = np.linalg.norm(pos_error)
+        # 1) Current EE pose and error
+        pose     = self.robot.kine_forward(state)
+        curr_p   = pose.t
+        curr_R   = rpy_to_rot_matrix(pose.rpy())
+        goal_p   = self.tcp_target[:3]
+        goal_R   = rpy_to_rot_matrix(self.tcp_target[3:6])
 
-        rot_current = rpy_to_rot_matrix(current_pose.rpy())
-        rot_target = rpy_to_rot_matrix(self.tcp_target[3:6])
-        rot_error_mat = rot_target.dot(rot_current.T)
-        rot_error = 0.5 * np.array([
-            rot_error_mat[2, 1] - rot_error_mat[1, 2],
-            rot_error_mat[0, 2] - rot_error_mat[2, 0],
-            rot_error_mat[1, 0] - rot_error_mat[0, 1]
+        pos_err  = goal_p - curr_p
+        R_err    = goal_R.dot(curr_R.T)
+        rot_err  = 0.5 * np.array([
+            R_err[2,1] - R_err[1,2],
+            R_err[0,2] - R_err[2,0],
+            R_err[1,0] - R_err[0,1]
         ])
-        rot_error_norm = np.linalg.norm(rot_error)
-                    
+
+        # 2) Integrate error (with clamping)
+        self.integral_pos += pos_err * self.dt
+        self.integral_rot += rot_err * self.dt
+
+        # anti‐windup: clamp each component
+        self.integral_pos = np.clip(self.integral_pos, -self.integral_max, self.integral_max)
+        self.integral_rot = np.clip(self.integral_rot, -self.integral_max, self.integral_max)
+
+        # 3) P + I in Cartesian
         v_cmd = np.zeros(6)
-        
-        if pos_error_mag > self.pos_tolerance:
-            v_cmd[:3] = self.pos_gain * pos_error
-        
-        if rot_error_norm > self.rot_tolerance:
-            v_cmd[3:] = self.rot_gain * rot_error
-            
-        J = self.robot.jacobian(q)
-        J_pinv = np.linalg.pinv(J)
-        q_dot_des = J_pinv @ v_cmd
-        
-        return q_dot_des
+        err_norm = np.linalg.norm(pos_err)
+        if err_norm > self.pos_tolerance:
+            v_cmd[:3] = (self.KP_pos * pos_err
+                        + self.KI_pos * self.integral_pos)
+        rot_norm = np.linalg.norm(rot_err)
+        if rot_norm > self.rot_tolerance:
+            v_cmd[3:] = (self.KP_rot * rot_err
+                        + self.KI_rot * self.integral_rot)
+
+        # 4) Map to joint‐space
+        J        = self.robot.jacobian(state)
+        qdot_raw = np.linalg.pinv(J) @ v_cmd
+
+        # 5) Smooth with 1st‐order filter
+        α     = self.dt / (self.tau_smooth + self.dt)
+        u_nom = α * qdot_raw + (1 - α) * self.u_prev
+        self.u_prev = u_nom
+
+        return u_nom
