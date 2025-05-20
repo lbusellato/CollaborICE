@@ -19,7 +19,7 @@ class PredictiveSafeController():
 
         # PCBF parameters
         self.T = prediction_horizon  # Prediction horizon
-        self.m = 1  # Barrier function parameter
+        self.m = 1e-6  # Barrier function parameter
         self.perturb_delta = 0.01  # For numerical gradient computation
         self.gamma = gamma
         self.max_joint_vel = max_joint_velocity
@@ -71,7 +71,7 @@ class PredictiveSafeController():
 
         state = np.array(self.robot.get_joint_position())
         H, dHdt, dHdu = self.hstar_func(t, state)
-        h_val = self.h_func(t, state)
+        h_val = self.h_func(t, state, self.get_updated_hand(t))
         u_nom = self.mu_func(state)
                 
         A = dHdu
@@ -93,13 +93,8 @@ class PredictiveSafeController():
         ws = self.workspace_limits
         dt = self.dt
 
-        lamda = 1
-        A_cyl = self.grad_h_cyl(q).reshape(1, -1)    # 1×n
-        b_cyl = -lamda * self.h_cyl(q)          # scalar
-
         constraints = [
             A @ u <= b,                                             # CBF constraint
-            #A_cyl @ u <= b_cyl,
             u >= -self.max_joint_vel,                               # max velocity constraint
             u <= self.max_joint_vel,                                # max velocity constraint
             J_cart[0, :] @ u <= (ws['x_max'] - tcp_pos[0]) / dt,    # x max workspace limit
@@ -112,7 +107,7 @@ class PredictiveSafeController():
         problem = cp.Problem(objective, constraints)
 
         # Naive safety: stop the robot
-        u_safe = -u_nom #np.zeros(self.n_joints)
+        u_safe = -u_nom
         try:
             problem.solve(solver=cp.OSQP)
             if u.value is None or np.any(np.isnan(u.value)):
@@ -136,29 +131,13 @@ class PredictiveSafeController():
         idx = int(round((t - self.base_t) / dt))
 
         idx = max(0, min(idx, N - 1))
+        self.logger.info(f"{idx}")
 
         hand_pos = self.hand_forecast[idx]
             
-        return hand_pos
-    
-    def h_cyl(self, q):
-        T_ee = self.robot.kine_forward(q)        # full 4×4 transform of end‐effector
-        x, y = T_ee.t[0], T_ee.t[1]   # extract XY
-        return 0.2 - np.hypot(x, y)
+        return leap_to_jaka(hand_pos)/1000
 
-    def grad_h_cyl(self, q):        
-        # 2×n_jacobian mapping q_dot -> [x_dot; y_dot]
-        J_xy = self.robot.jacobian(q)[:2, :]  
-        T_ee = self.robot.kine_forward(q)
-        x, y = T_ee.t[0], T_ee.t[1]
-        r = np.hypot(x, y)
-        # avoid division by zero
-        if r < 1e-6:
-            return np.zeros(self.n_joints)  
-        # ∇h = - (J_xy)^T * [x; y] / r
-        return - J_xy.T.dot(np.array([x, y]) / r)
-
-    def h_func(self, t, state):
+    def h_func(self, t, state, hand_pos):
         """
         Computes the safety margin between a dynamic spherical obstacle and 
         a cylindrical end-effector (EE) volume centered at the TCP.
@@ -178,8 +157,7 @@ class PredictiveSafeController():
         cyl_top = tcp_pos - h_cyl * tcp_z_axis
 
         # Obstacle position
-        obstacle_pos = self.get_updated_hand(t)
-        obstacle_pos = leap_to_jaka(obstacle_pos)/1000
+        obstacle_pos = hand_pos
 
         # Project obstacle onto cylinder axis
         axis_vec = cyl_top - tcp_pos
@@ -197,15 +175,15 @@ class PredictiveSafeController():
     
     def h_func_with_gradient(self, t, state):
         """Numerically computes the gradient of h with respect to the state q."""
-        h_val = self.h_func(t, state)
+        h_val = self.h_func(t, state, self.get_updated_hand(t))
         dh = np.zeros(self.state_len)
         for i in range(self.state_len):
             state_plus = state.copy()
             state_minus = state.copy()
             state_plus[i] += self.perturb_delta
             state_minus[i] -= self.perturb_delta
-            h_plus = self.h_func(t, state_plus)
-            h_minus = self.h_func(t, state_minus)
+            h_plus = self.h_func(t, state_plus, self.get_updated_hand(t))
+            h_minus = self.h_func(t, state_minus, self.get_updated_hand(t))
             dh[i] = (h_plus - h_minus) / (2 * self.perturb_delta)
         return h_val, dh
     
@@ -235,7 +213,7 @@ class PredictiveSafeController():
                 
         # Solve the optimization using trust-constr with the zero Hessian.
         result = minimize_scalar(
-            lambda tau: -self.h_func(tau, self.path_func(tau, t, state)[0]),
+            lambda tau: -self.h_func(tau, self.path_func(tau, t, state)[0], self.get_updated_hand(tau)),
             bounds=[t, t + self.T],
         )
         tau = result.x
@@ -247,7 +225,7 @@ class PredictiveSafeController():
             state_perturbed = state.copy()
             state_perturbed[i] += self.perturb_delta
             result_perturbed = minimize_scalar(
-                lambda tau: -self.h_func(tau, self.path_func(tau, t, state_perturbed)[0]),
+                lambda tau: -self.h_func(tau, self.path_func(tau, t, state_perturbed)[0], self.get_updated_hand(tau)),
                 bounds=[t, t + self.T],
             )
             tau_perturbed = result_perturbed.x
@@ -256,7 +234,7 @@ class PredictiveSafeController():
         return tau, h_of_tau, dtau_dx
     
     def find_zero(self, tau, t, x):
-        f = lambda z: self.h_func(z, self.path_func(z, t, x)[0])
+        f = lambda z: self.h_func(z, self.path_func(z, t, x)[0], self.get_updated_hand(z))
         
         eta = self.fzero(f, t, tau)
 
@@ -350,7 +328,7 @@ class PredictiveSafeController():
         if M1star <= t + switching_dt or (M1star <= t + self.T + switching_dt and h_of_M1star <= 0):
             # Case iii - eqn 18
             q_pred_plus = self.path_func(M1star + self.dt, t, state)[0]
-            h_plus_delta = self.h_func(M1star + self.dt, q_pred_plus)
+            h_plus_delta = self.h_func(M1star + self.dt, q_pred_plus, self.get_updated_hand(M1star + self.dt))
             dh_dtau = (h_plus_delta - h_of_M1star) / self.dt
             dtau_dt = 1 # Because the system is of high degree
             dt = dh_dtau * dtau_dt
@@ -362,7 +340,7 @@ class PredictiveSafeController():
         elif M1star <= t + self.T + switching_dt and h_of_M1star > 0:
             # Case ii - eqn 17
             q_pred_plus = self.path_func(M1star + self.dt, t, state)[0]
-            h_plus_delta = self.h_func(M1star + self.dt, q_pred_plus)
+            h_plus_delta = self.h_func(M1star + self.dt, q_pred_plus, self.get_updated_hand(M1star + self.dt))
             dh_dtau = (h_plus_delta - h_of_M1star) / self.dt
             dtau_dt = 1 # For simplicity
             dt = dm + dh_dtau * dtau_dt

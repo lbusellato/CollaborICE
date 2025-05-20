@@ -65,6 +65,7 @@ class JAKA(Node):
             raise RuntimeError(f"{u * self.dt}")
         
         self.h_star_history.append(h)
+        self.h_history.append(self.controller.h_func(0, self.robot.get_joint_position(), 0))
         self.t_history.append(self.t)
 
         self.q_target += u * self.dt
@@ -96,7 +97,7 @@ class JAKA(Node):
         fig, ax = plt.subplots(figsize=(16, 9), dpi=100)    
 
         # 3) Plot with thick lines and big markers
-        ax.plot(t, h,
+        ax.plot(t, h_star,
                 linewidth=3,
                 marker='o',
                 markersize=6,
