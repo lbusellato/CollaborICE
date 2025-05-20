@@ -3,6 +3,7 @@ import inspect
 from jaka_interface.data_types import *
 from jaka_interface.decorators import *
 from jaka_messages.msg import RobotState
+from spatialmath import SE3
 from typing import Any
 
 class BaseRobot():
@@ -1349,7 +1350,7 @@ class BaseRobot():
         raise NotImplementedError(f"{inspect.currentframe().f_code.co_name} is not implemented")
 
     @process_sdk_call(connected=True)
-    def kine_forward(self, joint_pos: list) -> list:
+    def kine_forward(self, joint_pos: list) -> SE3:
         """Compute forward kinematics.
 
         Parameters
@@ -1363,7 +1364,7 @@ class BaseRobot():
             The corresponding TCP pose.
         """
         return self._kine_forward(joint_pos)
-    def _kine_forward(self, joint_pos: list) -> list:
+    def _kine_forward(self, joint_pos: list) -> SE3:
         raise NotImplementedError(f"{inspect.currentframe().f_code.co_name} is not implemented")
 
     @process_sdk_call(connected=True)

@@ -41,7 +41,7 @@ def se3_to_jaka(se3_pose: SE3)->list:
     """
     return [*se3_pose.t] + [*se3_pose.eul()]
 
-def rpy_to_rot_matrix(rpy: list) -> list:
+def rpy_to_rot_matrix(rpy: list) -> np.ndarray:
     """Convert RPY angles to a rotation matrix.
 
     Parameters
@@ -240,8 +240,10 @@ def ros_to_list(ros_pose: Pose)->list:
             ros_pose.orientation.w]
 
 def leap_to_jaka(leap_pose: list,
-                 R: np.ndarray= np.array([[0,-1,0], [0,0,1], [-1,0,0]]),
-                 t: np.ndarray= np.array([0.475, -0.375, 0.01]))->np.ndarray:
+                 R: np.ndarray= np.array([[0,-1,0], 
+                                          [0,0,1], 
+                                          [-1,0,0]]),
+                 t: np.ndarray= np.array([0.50, -0.375, 0.01]))->np.ndarray:
     """Converts a pose in LEAP format to JAKA format. Set the proper rotation matrix and translation vector to properly 
     align LEAP's frame to the robot's.
 

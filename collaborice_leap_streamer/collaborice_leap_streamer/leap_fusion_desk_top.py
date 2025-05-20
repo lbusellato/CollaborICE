@@ -8,7 +8,7 @@ from std_msgs.msg import String
 
 import json
 
-from collaborice_leap_streamer.lib_fusion import separate_hands, fuse_hand
+from collaborice_leap_streamer.lib_fusion import separate_hands, fuse_hand, rotations_top_hand
 
 
 class LeapFusion(Node):
@@ -33,7 +33,7 @@ class LeapFusion(Node):
         self.frame_counter = 0
 
     def listener_callback_1(self, msg):
-        print('call desktop')
+        #print('call desktop')
         new_data = msg.data
         try:
             # Parse the JSON formatted string into a dictionary
@@ -56,7 +56,7 @@ class LeapFusion(Node):
         self.fuse_data()
 
     def listener_callback_2(self, msg):
-        print('call screen')
+        #print('call screen')
         new_data = msg.data
         try:
             # Parse the JSON formatted string into a dictionary
@@ -72,8 +72,11 @@ class LeapFusion(Node):
         self.last_update_leap2 = this_time
         hands = data['hands']
         left_hand, right_hand = separate_hands(hands)
-        self.hand_left_leap2 = left_hand
-        self.hand_right_leap2 = right_hand
+        if left_hand:
+            self.hand_left_leap2 = rotations_top_hand(left_hand)
+        if right_hand:  
+            self.hand_right_leap2 = rotations_top_hand(right_hand)
+        self.fuse_data()
         self.fuse_data()
 
     def publish_joints(self):
@@ -113,7 +116,7 @@ class LeapFusion(Node):
         msg = self.create_frame(fused_left_hand, fused_right_hand, current_time)
 
         self.publisher_.publish(msg)
-        print('Published fused data')
+        #print('Published fused data')
 
 
 

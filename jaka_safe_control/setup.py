@@ -25,7 +25,7 @@ setup(
         'console_scripts': [
             'vanilla_triangle_wave = jaka_safe_control.vanilla_triangle_wave:main',   
             'predictive_triangle_wave = jaka_safe_control.predictive_triangle_wave:main',          
-            'leap_subscriber_node = jaka_safe_control.leap_subscriber_node:main',
+            'leap_subscriber_node = jaka_safe_control.leap_subscriber_node:main',          
             'sim_test = jaka_safe_control.sim_test:main'
         ],
     },

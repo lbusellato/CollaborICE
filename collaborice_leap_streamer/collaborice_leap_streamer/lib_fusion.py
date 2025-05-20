@@ -5,10 +5,12 @@ from scipy.spatial.transform import Rotation as Rscipy
 
 
 # Identity rotation matrix (3x3)
-R = np.eye(3)
-
+'''R = np.array([[180,0,0], 
+            [0,1,0], 
+            [0,0,30]])'''
+R=Rscipy.from_euler('xyz', (180, 0, -30), degrees=True).as_matrix()
 # Zero translation vector (3,)
-t = np.zeros(3)
+t = np.array([-0.51,-0.78,0])#np.zeros(3)
 def transform_quaternion(q):
 
     rot = Rscipy.from_quat(q)
@@ -16,7 +18,7 @@ def transform_quaternion(q):
     return transformed_rot.as_quat()
 
 def avg_quat(q1, q2):
-    q1=transform_quaternion(q1)
+    #q1=transform_quaternion(q1)
     avg = [(a + b) / 2 for a, b in zip(q1, q2)]
     norm = np.linalg.norm(avg)
     return [x / norm for x in avg] if norm != 0 else avg
@@ -32,11 +34,44 @@ def weighted_average(v1, v2, c1, c2):#da verificare
     return [(a * c1 + b * c2) / total for a, b in zip(v1, v2)]
 
 def avg_vec(v1, v2):
-    v1=transform_point(v1)
+    #v1=transform_point(v1)
     return [(a + b) / 2 for a, b in zip(v1, v2)]
 
 
 
+def rotations_top_hand(h1):
+    print(h1)
+    c1 = h1['confidence']
+
+    avg_hand = {
+        'hand_type': h1['hand_type'],  # assume same
+        'hand_id': -1,  # new ID
+        'confidence': c1,
+        'hand_keypoints': {
+            'palm_position': transform_point(h1['hand_keypoints']['palm_position']),
+            'palm_orientation': transform_quaternion(h1['hand_keypoints']['palm_orientation']),
+            'arm': {
+                'prev_joint': transform_point(h1['hand_keypoints']['arm']['prev_joint']),
+                'next_joint':transform_point(h1['hand_keypoints']['arm']['next_joint']),
+                'rotation': transform_quaternion(h1['hand_keypoints']['arm']['rotation']),
+            },
+            'fingers': {},
+            'grab_angle': transform_quaternion(h1['hand_keypoints']['grab_angle'])
+        }
+    }
+
+    for finger_name in h1['hand_keypoints']['fingers']:
+        avg_hand['hand_keypoints']['fingers'][finger_name] = {}
+        for bone in ['metacarpal', 'proximal', 'intermediate', 'distal']:
+            b1 = h1['hand_keypoints']['fingers'][finger_name][bone]
+            #b2 = h2['hand_keypoints']['fingers'][finger_name][bone]
+            avg_hand['hand_keypoints']['fingers'][finger_name][bone] = {
+                'prev_joint': transform_point(b1['prev_joint'] ),
+                'next_joint': transform_point(b1['next_joint'] ),
+                'rotation': transform_quaternion(b1['rotation'] ),
+            }
+    #print(avg_hand)
+    return avg_hand
 
 def average_hand_data(h1, h2):
     print(h1)

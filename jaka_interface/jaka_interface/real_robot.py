@@ -1263,7 +1263,7 @@ class RealRobot(BaseRobot):
             ret = self.chain.ik_LM(jaka_to_se3(cartesian_pose), q0=ref_pos)
             return ((JAKA_ERR_CODES.ERR_KINE_INVERSE_ERR.value,) if not ret[1] else (JAKA_ERR_CODES.SUCCESS_CODE.value, ret[0]))
 
-    def _kine_forward(self, joint_pos: list)->list:
+    def _kine_forward(self, joint_pos: list)->SE3:
         """Compute forward kinematics.
 
         Parameters

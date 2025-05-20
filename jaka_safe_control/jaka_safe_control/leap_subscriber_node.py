@@ -55,6 +55,7 @@ class LeapSubscriberNode(Node):
         if self.hand_pos is not None:
             x, y, z, = [*self.hand_pos]
             self.leap_publisher.publish(LeapHand(x=x, y=y, z=z, radius=self.hand_radius))
+            
 def main():
     rclpy.init()
     node = LeapSubscriberNode()    

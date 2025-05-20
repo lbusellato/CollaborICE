@@ -41,7 +41,8 @@ def generate_launch_description():
     leap_subscriber_node = Node(
         package='jaka_safe_control',
         executable='leap_subscriber_node',
-        output='screen'
+        output='screen',
+        emulate_tty=True
     )
 
     # Launch the JAKA Safe Control node
@@ -81,7 +82,16 @@ def generate_launch_description():
             'publish_rate_limit': LaunchConfiguration('publish_rate_limit'),
             'tracking_mode': LaunchConfiguration('tracking_mode')
         }],
-        output='screen'
+        output='screen',
+        emulate_tty=True
+    )
+
+    leap_fusion_node = Node(
+        package = 'collaborice_leap_streamer',
+        executable = 'leap_fusion',
+        name = 'leap_fusion',
+        output='screen',
+        emulate_tty=True
     )
 
     return launch.LaunchDescription([
@@ -90,6 +100,7 @@ def generate_launch_description():
         tracking_mode_arg,
         leap_streamer_node,
         leap_subscriber_node,
+        leap_fusion_node,
         cbf_arch_arg,
         use_joint_gui_arg,
         visualize_leap_arg,

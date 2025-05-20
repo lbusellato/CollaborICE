@@ -12,6 +12,8 @@ from jaka_messages.msg import LeapHand
 from jaka_safe_control.predictive_safe_controller import PredictiveSafeController
 from rclpy.node import Node
 from rclpy.executors import SingleThreadedExecutor
+from std_msgs.msg import String
+import json
 
 class JAKA(Node):
     def __init__(self):
@@ -30,11 +32,12 @@ class JAKA(Node):
         self.logger = rclpy.logging.get_logger('triangle_wave_node')
 
         self.t = 0
-        self.dt = 0.008
-        #self.control_loop_timer = self.create_timer(self.dt, self.control_loop) 
+        self.dt = 0.01
+        self.control_loop_timer = self.create_timer(self.dt, self.control_loop) 
 
         # Hand position
-        self.hand_pos_sub = self.create_subscription(LeapHand, '/jaka/control/hand', self.leap_hand_callback, 1)
+        #self.hand_pos_sub = self.create_subscription(LeapHand, '/jaka/control/hand', self.leap_hand_callback, 1)
+        self.hand_pos_sub = self.create_subscription(String, '/applications/hand_forecasting', self.forecast_callback, 1)
         self.hand_pos = np.array([-0.4, 0.0, 0.3])
         self.hand_radius = 0.05
 
@@ -43,39 +46,41 @@ class JAKA(Node):
                 
         self.home = np.array([-400, 300, 300, -np.pi, 0, -20*np.pi/180])
         self.robot.disable_servo_mode()
-        #self.robot.linear_move(self.home, MoveMode.ABSOLUTE, 100, True)
+        self.robot.linear_move(self.home, MoveMode.ABSOLUTE, 100, True)
         self.robot.enable_servo_mode()
 
+        self.h_star_history = []
         self.h_history = []
         self.t_history = []
 
         self.q_target = self.robot.get_joint_position()
 
+        self.hand_forecast = []
+
     def control_loop(self):   
         start = time.time()
 
-        qd_out = self.controller.update_w_cbf(self.t, self.hand_pos)
-        if max(abs(qd_out * self.dt)) > 1e-1:
-            raise RuntimeError(f"{qd_out * self.dt}")
-
-        q = self.robot.get_joint_position()
-
-        h_val = self.controller.h_func(self.t, q)
-
-        # 2) store it
-        self.h_history.append(h_val)
+        u, h = self.controller.update(self.t, self.hand_forecast)
+        if max(abs(u * self.dt)) > 1e-1:
+            raise RuntimeError(f"{u * self.dt}")
+        
+        self.h_star_history.append(h)
         self.t_history.append(self.t)
 
-        self.q_target += qd_out * self.dt
+        self.q_target += u * self.dt
 
         self.jaka_interface.robot.servo_j(self.q_target, MoveMode.ABSOLUTE)
 
         actual_dt = time.time() - start
-        self.t += actual_dt#self.dt
+        self.t += actual_dt
     
-    def leap_hand_callback(self, msg: LeapHand):
-        self.hand_pos = np.array([msg.x, msg.y, msg.z])
-        self.hand_radius = msg.radius        
+    def forecast_callback(self, msg: String):
+        msg = json.loads(msg.data)
+        self.hand_forecast = msg.get('future_trajectory')
+
+    #def leap_hand_callback(self, msg: LeapHand):
+    #    self.hand_pos = np.array([msg.x, msg.y, msg.z])
+    #    self.hand_radius = msg.radius        
 
     def loginfo(self, msg):
         self.logger.info(str(msg))
@@ -83,6 +88,7 @@ class JAKA(Node):
 
     def plot_and_exit(self):
         # Grab your history
+        h_star = np.array(self.h_star_history)
         h = np.array(self.h_history)
         t = np.array(self.t_history)
 
@@ -90,6 +96,11 @@ class JAKA(Node):
         fig, ax = plt.subplots(figsize=(16, 9), dpi=100)    
 
         # 3) Plot with thick lines and big markers
+        ax.plot(t, h,
+                linewidth=3,
+                marker='o',
+                markersize=6,
+                label='h(t)')
         ax.plot(t, h,
                 linewidth=3,
                 marker='o',

@@ -14,7 +14,7 @@ class LeapMotionVisualizer(Node):
         # Subscribe to Leap Motion JSON topic
         self.subscription = self.create_subscription(
             String, 
-            '/sensors/leapDesk/json', # TODO: in the future we would use leapFusion here
+            '/sensors/leapDesk/json', 
             self.leap_callback, 
             10
         )
@@ -58,7 +58,7 @@ class LeapMotionVisualizer(Node):
         try:
             leap_data = json.loads(msg.data)  # Parse JSON
             hands = leap_data.get("hands", [])  # Extract hand data
-            
+                       
             marker_array = MarkerArray()
 
             if not hands:
@@ -68,8 +68,10 @@ class LeapMotionVisualizer(Node):
             marker_id = 0
             self.add_marker(marker_array, marker_id, [0,0,0], "leap", "", 0.05)
             marker_id += 1
-             
+                        
             for hand in hands:
+                if hand is None:
+                    continue
                 # Filter out low-confidence hand detections
                 if hand.get('confidence') > self.min_hand_confidence:
                     hand_type = hand.get("hand_type", "unknown")
