@@ -80,7 +80,7 @@ class PCBFSimulation:
         # Workspace definition
         self.workspace_limits = {
             'x_min': -0.5, 'x_max': 0.1, # don't hit the operator/camera rig
-            'y_min': -0.5, 'y_max': 0.7, # don't hit the milling
+            'y_min': -0.1, 'y_max': 0.7, # don't hit the milling
             'z_min':  0.3           # don't go below table height
         }
 
@@ -174,7 +174,6 @@ class PCBFSimulation:
             new_state = current_state + u * self.dt
             states.append(new_state)            
             self.robot.q = new_state
-
 
             if VISUAL_SIM: 
 
@@ -501,7 +500,8 @@ class PCBFSimulation:
         
         problem = cp.Problem(objective, constraints)
 
-        u_safe = np.zeros(self.n_joints)
+        # Naive safety: stop the robot
+        u_safe = -u_nom #np.zeros(self.n_joints)
         try:
             problem.solve(solver=cp.OSQP)
             if u.value is None or np.any(np.isnan(u.value)):

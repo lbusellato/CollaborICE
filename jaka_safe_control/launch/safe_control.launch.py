@@ -49,7 +49,8 @@ def generate_launch_description():
         package='jaka_safe_control',
         executable=[LaunchConfiguration('cbf_arch'), '_triangle_wave'],
         output='screen',
-        parameters=[{'publish_robot_state': LaunchConfiguration('use_rviz')}]
+        parameters=[{'publish_robot_state': LaunchConfiguration('use_rviz')}],
+        emulate_tty=True
     )
 
     frame_id_arg = DeclareLaunchArgument(

@@ -28,7 +28,8 @@ class RealRobot(BaseRobot):
                  urdf_package: str='jaka_description',
                  urdf_name: str='jaka.urdf'):
         # Initialize the robot
-        self.robot = jkrc.RC(ip)
+        self.ip = ip
+        self.robot = jkrc.RC(self.ip)
 
         # Gripper DOUT pins
         self.gripper_power_pin = gripper_power_pin
@@ -74,6 +75,10 @@ class RealRobot(BaseRobot):
     def _login(self)->None:
         """Connects to the robot.
         """
+        # Try to ping the robot to see if it is alive
+        cmd = f"ping -c 1 {self.ip} > /dev/null 2>&1"
+        if os.system(cmd) != 0:
+            return (JAKA_ERR_CODES.ERR_COMMUNICATION_ERR.value,)
         return self.robot.login()
 
     def _logout(self)->None:

@@ -14,7 +14,7 @@ class LeapMotionVisualizer(Node):
         # Subscribe to Leap Motion JSON topic
         self.subscription = self.create_subscription(
             String, 
-            '/sensors/leapScreen/json', 
+            '/sensors/leapDesk/json', # TODO: in the future we would use leapFusion here
             self.leap_callback, 
             10
         )
