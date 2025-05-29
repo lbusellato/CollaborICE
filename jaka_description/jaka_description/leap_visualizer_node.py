@@ -14,13 +14,13 @@ class LeapMotionVisualizer(Node):
         # Subscribe to Leap Motion JSON topic
         self.subscription = self.create_subscription(
             String, 
-            '/sensors/leapDesk/json', 
+            '/sensors/leapFusion/json', 
             self.leap_callback, 
             10
         )
         self.subscription_ = self.create_subscription(
             String,     
-            '/applications/hand_forecasting', 
+            '/applications/hand_forecasting/kalman', 
             self.forecasting_callback, 
             10
         )

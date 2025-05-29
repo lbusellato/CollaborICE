@@ -11,7 +11,7 @@ class LeapSubscriberNode(Node):
     def __init__(self):
         super().__init__('leap_subscriber_node')
 
-        self.declare_parameter('min_hand_confidence', 0.1)
+        self.declare_parameter('min_hand_confidence', 0.80)
         self.min_hand_confidence = self.get_parameter('min_hand_confidence').value
         
         self.create_subscription(String, '/sensors/leapDesk/json', self.leap_subscriber_callback, qos_profile=1)
@@ -21,17 +21,19 @@ class LeapSubscriberNode(Node):
         leap_dt = 1 / leap_freq
         self.leap_publisher_timer = self.create_timer(leap_dt, self.leap_publisher_callback)
 
-        self.hand_pos = None
-        self.hand_radius = 0
+        self.hand_pos = np.array([0.0, 0.0, 0.0])
+        self.hand_radius = 0.0
     
     def leap_subscriber_callback(self, msg: String):
         data = json.loads(msg.data)
         hands = data.get('hands')
-        flag = True
+        hand_radius = 0.0
+        hand_pos = np.array([0.0, 0.0, 0.0])
         if hands:
             # Filter out low-confidence hand detections
             confidences = np.array([h.get('confidence') for h in hands])
             hand = hands[np.argmax(confidences)]
+
             if hand.get('confidence') > self.min_hand_confidence:
                 keypoints = hand.get('hand_keypoints')
 
@@ -44,17 +46,15 @@ class LeapSubscriberNode(Node):
                     # Compute a bounding sphere from the palm to the farthest away hand joint
                     dists = np.linalg.norm(joint_positions - palm_position, axis=1)
                     # Convert to JAKA world
-                    self.hand_radius = np.max(dists) * 1000
-                    self.hand_pos = leap_to_jaka(palm_position)
-                    flag = False
-        if flag: # No hand was detected
-            self.hand_radius = 0
-            self.hand_pos = None
+                    hand_radius = np.max(dists) * 1000
+                    hand_pos = leap_to_jaka(palm_position)
+        
+        self.hand_radius = hand_radius
+        self.hand_pos = hand_pos
 
     def leap_publisher_callback(self):
-        if self.hand_pos is not None:
-            x, y, z, = [*self.hand_pos]
-            self.leap_publisher.publish(LeapHand(x=x, y=y, z=z, radius=self.hand_radius))
+        x, y, z, = [*self.hand_pos]
+        self.leap_publisher.publish(LeapHand(x=x, y=y, z=z, radius=self.hand_radius))
             
 def main():
     rclpy.init()

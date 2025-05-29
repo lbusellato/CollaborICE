@@ -33,7 +33,7 @@ JAKA_ERR_MSGS = {
        -15 : 'ERR_VALUE_OVERSIZE: Insufficient reserved memory',
        -16 : 'ERR_KINE_FORWARD: Kine_forward error',
        -17 : 'ERR_EMPTY_FOLDER: Not support empty folder',
-       -20 : 'ERR_PROTECTIVE_STOP: Protective stop',
+       -20 : 'ERR_PROTECTIVE_STOP: Collision detected',
        -21 : 'ERR_EMERGENCY_STOP: Protective stop',
        -22 : 'ERR_SOFT_LIMIT: On soft limit',
        -30 : 'ERR_CMD_ENCODE: Fail to encode cmd string',

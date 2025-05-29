@@ -80,7 +80,7 @@ class PCBFSimulation:
         # Workspace definition
         self.workspace_limits = {
             'x_min': -0.5, 'x_max': 0.1, # don't hit the operator/camera rig
-            'y_min': -0.1, 'y_max': 0.7, # don't hit the milling
+            'y_min': -0.5, 'y_max': 0.7, # don't hit the milling
             'z_min':  0.3           # don't go below table height
         }
 

@@ -537,13 +537,11 @@ class RealRobot(BaseRobot):
         """
         return self.robot.is_in_drag_mode()
 
-    @untested
     def _enable_drag_mode(self)->None:
         """Enable drag mode.
         """
         return self.robot.drag_mode_enable(True)
-    
-    @untested
+    # TODO: align to SDK signature
     def _disable_drag_mode(self)->None:
         """Disable drag mode.
         """

@@ -8,8 +8,6 @@ import csv
 from os.path import dirname, join
 from ament_index_python.packages import get_package_share_directory
 from scipy.interpolate import interp1d
-import cProfile
-import pstats
 
 import matplotlib.pyplot as plt
 
@@ -25,7 +23,7 @@ import json
 from scipy.optimize import minimize_scalar
 import cvxpy as cp
 
-MOVING = True
+MOVING = False
 
 class JAKA(Node):
     def __init__(self):
@@ -44,25 +42,25 @@ class JAKA(Node):
         self.logger = rclpy.logging.get_logger('triangle_wave_node')
 
         self.t = 0
-        self.dt = 0.05
+        self.dt = 0.01
+        if MOVING:
+            self.control_loop_timer = self.create_timer(self.dt, self.control_loop) 
 
         # Hand position
         self.hand_pos_sub = self.create_subscription(LeapHand, '/jaka/control/hand', self.leap_hand_callback, 1)
-        self.hand_forecast_sub = self.create_subscription(String, '/applications/hand_forecasting/kalman', self.forecast_callback, 1)
+        self.hand_forecast_sub = self.create_subscription(String, '/applications/hand_forecasting', self.forecast_callback, 1)
         self.current_hand_pos = np.zeros(3)
         self.current_hand_radius = 0.0
 
         # PCBF parameters
         self.T = 1  # Prediction horizon
+        self.m = 1e-4 # Barrier function parameter
+        self.perturb_delta = 0.01  # For numerical gradient computation
+        self.alpha = 40
+        self.max_joint_vel = np.pi / 2
         self.min_safety_distance = 0.025
-        self.h_max_estimate = self.current_hand_radius + self.min_safety_distance # Derived from h_func definition
-        self.m = self.h_max_estimate / self.T**2 # Barrier function parameter
-        self.perturb_delta = 1e-4  # For numerical gradient computation
-        self.alpha = 20       
-        self.lamda = 10 
-        self.max_joint_vel = np.pi / 4
 
-        self.smoothing = 0.2   
+        self.smoothing = 0
         self.prev_u = np.zeros(6)
 
         self.n_joints = 6
@@ -73,15 +71,11 @@ class JAKA(Node):
         self.tcp_target = self.targetA
         self.pos_tolerance = 1e-3
         self.rot_tolerance = 1e-2
-        self.pos_gain = 1  # position gain
+        self.pos_gain = 0.5  # position gain
         self.rot_gain = 1  # orientation gain
                 
         self.home = np.array([-400, 500, 300, -np.pi, 0, -20*np.pi/180])
-
-        self.rate = self.declare_parameter('rate', 100.0).value
-
         if MOVING:
-            self.control_loop_timer = self.create_timer(1.0/self.rate, self.control_loop) 
             self.robot.disable_servo_mode()
             self.robot.linear_move(self.home, MoveMode.ABSOLUTE, 100, True)
             self.robot.enable_servo_mode()
@@ -106,24 +100,16 @@ class JAKA(Node):
         self.h_data = []                 # safety function values
         self.hstar_data = []             # predictive CBF values (if using PCBf)
 
-        self.last_time = self.get_clock().now()
-        self.iter = 0
-        self.dt_history = np.zeros(10)
-
-        self.converged = False
-
     def control_loop(self):   
-        
-        self.t += self.dt
+        start = time.time()
 
         current_state = self.robot.get_joint_position()
 
-        if not self.converged:
-            u_nom = self.mu_func(current_state, 0.008)
+        if not self.check_convergence(current_state):
+            u_nom = self.mu_func(current_state)
 
-            #u, h_star = self.calculate_u_pcbf(self.t, current_state)
-            u, h = self.calculate_u_cbf(self.t, current_state)
-            h_star = None
+            u, h_star = self.calculate_u_pcbf(self.t, current_state)
+            h = self.h_func(self.t, current_state)
 
             if max(abs(u * self.dt)) > 5e-1:
                 raise RuntimeError(f"{u * self.dt}")
@@ -131,30 +117,14 @@ class JAKA(Node):
             u_out = self.smoothing * self.prev_u + (1 - self.smoothing) * u
             self.prev_u = u
 
-            self.q_target += u_out * 0.008#self.dt
-            h = self.h_func(self.t, self.q_target)
-
-            #now = self.get_clock().now()
-            #self.dt_history[self.iter] = (now - self.last_time).nanoseconds * 1e-9
-            #self.iter += 1
-            #if self.iter == 10:
-            #    self.loginfo(f"Loop frequency: {1 / np.mean(self.dt_history)}")
-            #    self.iter = 0
-            #self.last_time = now
+            self.q_target += u_out * self.dt
 
             self.jaka_interface.robot.servo_j(self.q_target, MoveMode.ABSOLUTE)
 
             tcp_pose = self.robot.kine_forward(current_state)
-
-            pos_error = np.linalg.norm(tcp_pose.t - self.tcp_target[:3])
-            current_rpy = np.array(tcp_pose.rpy())
-            rpy_error = np.array([self.angle_diff(current_rpy[i], self.tcp_target[3+i]) for i in range(3)])
-            rot_error = np.linalg.norm(rpy_error)
-            
-            self.converged = (pos_error < self.pos_tolerance and rot_error < self.rot_tolerance)
-
+            tcp_pos = tcp_pose.t
             self.time_data.append(self.t)
-            self.ee_pos_data.append(tcp_pose.t.copy())
+            self.ee_pos_data.append(tcp_pos.copy())
             self.u_nom_data.append(u_nom.copy())
             self.u_data.append(u.copy())
             self.h_data.append(h)
@@ -165,8 +135,15 @@ class JAKA(Node):
             if np.allclose(self.tcp_target, self.targetA, rtol=1e-2):
                 self.tcp_target = self.targetB
             else:
-                self.tcp_target = self.targetA  
-            self.converged = False
+                self.tcp_target = self.targetA
+            #self.loginfo('Done')
+            #self.control_loop_timer.cancel()
+
+            #self.save_data()
+            #self.plot_data()
+
+        self.dt = time.time() - start
+        self.t += self.dt
 
     def save_data(self):
         """
@@ -250,14 +227,12 @@ class JAKA(Node):
     def forecast_callback(self, msg: String):
         msg = json.loads(msg.data)
         forecast = msg.get('future_trajectory')
-        forecast = [leap_to_jaka(f)/1000 for f in forecast]
-        forecast = [self.current_hand_pos] + forecast
+        forecast = [self.current_hand_pos] + [leap_to_jaka(f)/1000 for f in forecast]
         self.hand_forecast = forecast
 
     def leap_hand_callback(self, msg: LeapHand):
         self.current_hand_pos = np.array([msg.x, msg.y, msg.z])/1000
         self.current_hand_radius = msg.radius/1000    
-        self.h_max_estimate = self.min_safety_distance + self.current_hand_radius
     
     def get_updated_obstacle(self, t):
         # build a simple list: [current_pos, forecast[0], forecast[1], ...]
@@ -280,6 +255,7 @@ class JAKA(Node):
         
         return obstacle_pos, obstacle_radius
 
+
     def h_func(self, t, state):
         """
         Computes the safety margin between a dynamic spherical obstacle and 
@@ -301,6 +277,7 @@ class JAKA(Node):
 
         # Obstacle position and radius at time t in [tau, tau + T]
         obstacle_pos, obstacle_radius = self.get_updated_obstacle(t)
+        self.safety_distance = self.min_safety_distance + obstacle_radius
 
         # Project obstacle onto cylinder axis
         axis_vec = cyl_top - tcp_pos
@@ -314,7 +291,7 @@ class JAKA(Node):
         dist_to_cylinder_surface = np.linalg.norm(obstacle_pos - closest_point_on_axis) - r_cyl
 
         # Safety margin
-        return (self.min_safety_distance + obstacle_radius) - dist_to_cylinder_surface
+        return self.safety_distance - dist_to_cylinder_surface
     
     def h_func_with_gradient(self, t, state):
         """Numerically computes the gradient of h with respect to the state q."""
@@ -329,14 +306,23 @@ class JAKA(Node):
             h_minus = self.h_func(t, state_minus)
             dh[i] = (h_plus - h_minus) / (2 * self.perturb_delta)
         return h_val, dh
-
+    
     def path_func(self, tau, t, state):
+        """
+        Predicts the state at time tau using single integrator dynamics:
+        q_pred = q + u_nom * (tau - t)
+        Returns the predicted state, its derivative with respect to tau,
+        derivative with respect to t, and the identity derivative w.r.t. state.
+        """
         delta_t = tau - t
         u_nom = self.mu_func(state)
-        q_pred = state + u_nom * delta_t
-        dp_dtau = u_nom      # ∂p/∂τ
-        dp_dt    = -u_nom    # ∂p/∂t
-        dx       = np.eye(self.state_len)
+        q = state
+        q_pred = q + u_nom * delta_t
+        
+        dp_dtau = u_nom      # ∂q_pred/∂tau
+        dp_dt = -u_nom       # ∂q_pred/∂t
+        dx = np.eye(self.state_len)  # ∂q_pred/∂q
+        
         return q_pred, dp_dtau, dp_dt, dx
     
     def find_max(self, t, state):
@@ -348,9 +334,7 @@ class JAKA(Node):
         # Solve the optimization using trust-constr with the zero Hessian.
         result = minimize_scalar(
             lambda tau: -self.h_func(tau, self.path_func(tau, t, state)[0]),
-            method="bounded",
             bounds=[t, t + self.T],
-            options={'xatol': 1e-6}
         )
         tau = result.x
         h_of_tau = -result.fun
@@ -362,9 +346,7 @@ class JAKA(Node):
             state_perturbed[i] += self.perturb_delta
             result_perturbed = minimize_scalar(
                 lambda tau: -self.h_func(tau, self.path_func(tau, t, state_perturbed)[0]),
-                method="bounded",
                 bounds=[t, t + self.T],
-                options={'xatol': 1e-6}
             )
             tau_perturbed = result_perturbed.x
             dtau_dx[i] = (tau_perturbed - tau) / self.perturb_delta
@@ -431,7 +413,6 @@ class JAKA(Node):
         return tau
     
     def m_func(self, lambda_val):
-        self.m = self.h_max_estimate / self.T**2 # Recompute
         m_val = self.m * lambda_val**2
         dm_val = 2 * self.m * lambda_val
         return m_val, dm_val
@@ -491,7 +472,7 @@ class JAKA(Node):
         
         return hstar, dt, du
     
-    def mu_func(self, state, dt=None):
+    def mu_func(self, state):
         """
         Nominal control law for velocity control.
         Uses a task-space proportional controller to generate a joint velocity command.
@@ -536,18 +517,19 @@ class JAKA(Node):
         J_cart = self.robot.jacobian(q)
         tcp_pos = self.robot.kine_forward(q).t
 
+
         ws = self.workspace_limits
         dt = self.dt
 
         constraints = [
-            A @ (u + u_nom) <= b,                                             # CBF constraint
-            (u + u_nom) >= -self.max_joint_vel,                               # max velocity constraint
-            (u + u_nom) <= self.max_joint_vel,                                # max velocity constraint
-            J_cart[0, :] @ (u + u_nom) <= (ws['x_max'] - tcp_pos[0]) / dt,    # x max workspace limit
-            -J_cart[0, :] @ (u + u_nom) <= (tcp_pos[0] - ws['x_min']) / dt,   # x min workspace limit
-            J_cart[1, :] @ (u + u_nom) <= (ws['y_max'] - tcp_pos[1]) / dt,    # y max workspace limit
-            -J_cart[1, :] @ (u + u_nom) <= (tcp_pos[1] - ws['y_min']) / dt,   # y min workspace limit
-            -J_cart[2, :] @ (u + u_nom) <= (tcp_pos[2] - ws['z_min']) / dt,   # z min workspace limit
+            A @ u <= b,                                             # CBF constraint
+            u >= -self.max_joint_vel,                               # max velocity constraint
+            u <= self.max_joint_vel,                                # max velocity constraint
+            J_cart[0, :] @ u <= (ws['x_max'] - tcp_pos[0]) / dt,    # x max workspace limit
+            -J_cart[0, :] @ u <= (tcp_pos[0] - ws['x_min']) / dt,   # x min workspace limit
+            J_cart[1, :] @ u <= (ws['y_max'] - tcp_pos[1]) / dt,    # y max workspace limit
+            -J_cart[1, :] @ u <= (tcp_pos[1] - ws['y_min']) / dt,   # y min workspace limit
+            -J_cart[2, :] @ u <= (tcp_pos[2] - ws['z_min']) / dt,   # z min workspace limit
             ]
         
         problem = cp.Problem(objective, constraints)
@@ -599,6 +581,19 @@ class JAKA(Node):
         
         return u, h_val   
     
+    def check_convergence(self, state):
+        """Checks if the end-effector is close enough to the target."""
+        q = state
+        current_pose = self.robot.kine_forward(q)
+        current_pos = current_pose.t
+        pos_error = np.linalg.norm(current_pos - self.tcp_target[:3])
+        current_rpy = np.array(current_pose.rpy())
+        rpy_error = np.array([self.angle_diff(current_rpy[i], self.tcp_target[3+i]) for i in range(3)])
+        rot_error = np.linalg.norm(rpy_error)
+        
+        return (pos_error < self.pos_tolerance and 
+                rot_error < self.rot_tolerance)
+    
     def angle_diff(self, a, b):
         diff = a - b
         return np.arctan2(np.sin(diff), np.cos(diff))
@@ -614,10 +609,6 @@ def spin_node(node):
 def main():
     rclpy.init()
     node = JAKA()
-
-    #pr = cProfile.Profile()
-    #pr.enable()
-
     if node.publish_robot_state:
         # If we are visualizing, spin the interface node in a separate thread
         interface = node.jaka_interface
@@ -630,9 +621,6 @@ def main():
         # User pressed Ctrl-C
         node.save_data()
     finally:
-        #pr.disable()
-        #ps = pstats.Stats(pr).sort_stats('cumtime')
-        #ps.print_stats(20)  # top 20 slowest functions
         node.destroy_node()
         rclpy.shutdown()
 

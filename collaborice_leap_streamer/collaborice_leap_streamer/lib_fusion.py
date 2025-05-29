@@ -4,27 +4,22 @@ import numpy as np
 from scipy.spatial.transform import Rotation as Rscipy
 
 
-# Identity rotation matrix (3x3)
-'''R = np.array([[180,0,0], 
-            [0,1,0], 
-            [0,0,30]])'''
-R=Rscipy.from_euler('xyz', (180, 0, -30), degrees=True).as_matrix()
+R=Rscipy.from_euler('xyz', (30, 180, 90), degrees=True).as_matrix()
 # Zero translation vector (3,)
-t = np.array([-0.51,-0.78,0])#np.zeros(3)
+t = np.array([0.51,0.78,0])#np.zeros(3)
 def transform_quaternion(q):
 
     rot = Rscipy.from_quat(q)
     transformed_rot = Rscipy.from_matrix(R) * rot
-    return transformed_rot.as_quat()
+    return (transformed_rot.as_quat()).tolist()
 
 def avg_quat(q1, q2):
-    #q1=transform_quaternion(q1)
     avg = [(a + b) / 2 for a, b in zip(q1, q2)]
     norm = np.linalg.norm(avg)
     return [x / norm for x in avg] if norm != 0 else avg
 
 def transform_point(p):
-    return (R @ np.array(p)) + t
+    return ((R @ np.array(p)) + t).tolist()
 
 
 def weighted_average(v1, v2, c1, c2):#da verificare
@@ -34,15 +29,13 @@ def weighted_average(v1, v2, c1, c2):#da verificare
     return [(a * c1 + b * c2) / total for a, b in zip(v1, v2)]
 
 def avg_vec(v1, v2):
-    #v1=transform_point(v1)
     return [(a + b) / 2 for a, b in zip(v1, v2)]
 
 
-
 def rotations_top_hand(h1):
-    print(h1)
+    if not h1:
+        return []
     c1 = h1['confidence']
-
     avg_hand = {
         'hand_type': h1['hand_type'],  # assume same
         'hand_id': -1,  # new ID
@@ -52,11 +45,11 @@ def rotations_top_hand(h1):
             'palm_orientation': transform_quaternion(h1['hand_keypoints']['palm_orientation']),
             'arm': {
                 'prev_joint': transform_point(h1['hand_keypoints']['arm']['prev_joint']),
-                'next_joint':transform_point(h1['hand_keypoints']['arm']['next_joint']),
+                'next_joint': transform_point(h1['hand_keypoints']['arm']['next_joint']),
                 'rotation': transform_quaternion(h1['hand_keypoints']['arm']['rotation']),
             },
             'fingers': {},
-            'grab_angle': transform_quaternion(h1['hand_keypoints']['grab_angle'])
+            'grab_angle': h1['hand_keypoints']['grab_angle']
         }
     }
 
@@ -70,11 +63,9 @@ def rotations_top_hand(h1):
                 'next_joint': transform_point(b1['next_joint'] ),
                 'rotation': transform_quaternion(b1['rotation'] ),
             }
-    #print(avg_hand)
     return avg_hand
 
 def average_hand_data(h1, h2):
-    print(h1)
     c1 = h1['confidence']
     c2 = h2['confidence']#NOT USED YET
 
@@ -108,7 +99,6 @@ def average_hand_data(h1, h2):
                 'next_joint': avg_vec(b1['next_joint'], b2['next_joint']),
                 'rotation': avg_quat(b1['rotation'], b2['rotation']),
             }
-    #print(avg_hand)
     return avg_hand
 
 
@@ -131,7 +121,7 @@ def separate_hands(hands):
 
 
 def fuse_hand(hand1, hand2):
-    if hand1  and hand2:  # both hand visible
+    if hand1 and hand2:  # both hand visible
         hand_fused = fuse_both(hand1, hand2)
 
         return hand_fused
@@ -174,7 +164,7 @@ def flatten_hand_data(hand_data):
     return flat_data
 
 def fuse_both(hand1, hand2):
-    print('fusion')
+    #print('fusion')
     fused_hand=average_hand_data(hand1,hand2)
     #fused_hand = hand2
     return fused_hand
@@ -182,4 +172,3 @@ def fuse_both(hand1, hand2):
 
 def get_this_time_method():
     return time.time()
-
