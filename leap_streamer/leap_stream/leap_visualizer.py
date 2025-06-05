@@ -7,14 +7,14 @@ from jaka_interface.pose_conversions import leap_to_jaka
 from geometry_msgs.msg import Point
 import numpy as np
 
-class LeapMotionVisualizer(Node):
+class LeapVisualizer(Node):
     def __init__(self):
-        super().__init__('leap_motion_visualizer_node')
+        super().__init__('leap_visualizer')
 
         # Subscribe to Leap Motion JSON topic
         self.subscription = self.create_subscription(
             String, 
-            '/sensors/leapFusion/json', 
+            '/leap/fusion', 
             self.leap_callback, 
             10
         )
@@ -26,10 +26,10 @@ class LeapMotionVisualizer(Node):
         )
 
         # Publisher for visualizing hand joints as spheres in RViz
-        self.marker_publisher = self.create_publisher(MarkerArray, '/leap/visualization/hand_markers', 10)
+        self.marker_publisher = self.create_publisher(MarkerArray, '/leap/visualizer/current', 10)
         self.last_marker_count = 0  # Track last marker count
 
-        self.fmarker_publisher = self.create_publisher(MarkerArray, '/forecasting/hand_markers', 10)
+        self.fmarker_publisher = self.create_publisher(MarkerArray, '/leap/visualizer/forecast', 10)
         self.flast_marker_count = 0  # Track last marker count
 
         self.min_hand_confidence = 0.1
@@ -141,7 +141,7 @@ class LeapMotionVisualizer(Node):
 
 def main():
     rclpy.init()
-    node = LeapMotionVisualizer()
+    node = LeapVisualizer()
     rclpy.spin(node)
     rclpy.shutdown()
 

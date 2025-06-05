@@ -45,9 +45,9 @@ def generate_launch_description():
 
     visualize_leap = LaunchConfiguration("visualize_leap")
     leap_visualizer_node = Node(
-        package='jaka_description',
-        executable='leap_visualizer_node',
-        name='leap_visualizer_node',
+        package='leap_stream',
+        executable='leap_visualizer',
+        name='leap_visualizer',
         condition=IfCondition(
             PythonExpression([
                 visualize_leap,
