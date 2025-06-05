@@ -53,7 +53,6 @@ Visualization Manager:
     - Alpha: 1
       Class: rviz_default_plugins/RobotModel
       Collision Enabled: false
-      Description File: /home/buse/collaborice_ws/src/jaka_description/urdf/jaka.urdf
       Description Source: Topic
       Description Topic:
         Depth: 5
@@ -130,7 +129,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /leap/visualization/hand_markers
+        Value: /leap/visualizer/current
       Value: true
     - Class: rviz_default_plugins/MarkerArray
       Enabled: true
@@ -142,7 +141,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /forecasting/hand_markers
+        Value: /leap/visualizer/forecast
       Value: true
   Enabled: true
   Global Options:
