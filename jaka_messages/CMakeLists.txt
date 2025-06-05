@@ -16,7 +16,6 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RobotState.msg"
   "msg/Payload.msg"
   "msg/LeapHand.msg"
-  "srv/TargetReached.srv"
  )
 
 if(BUILD_TESTING)
