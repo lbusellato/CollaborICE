@@ -14,8 +14,6 @@ find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RobotState.msg"
-  "msg/Payload.msg"
-  "msg/LeapHand.msg"
  )
 
 if(BUILD_TESTING)
