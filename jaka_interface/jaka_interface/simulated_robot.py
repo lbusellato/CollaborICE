@@ -70,6 +70,21 @@ class SimulatedRobot(BaseRobot):
     #                                       #
     #########################################
 
+    def _linear_move(self, tcp_pos: list, move_mode: MoveMode, speed: float, is_blocking: bool):
+        # Compute target joint position from inverse kinematics
+        target_joints = self.kine_inverse(self.joint_position, tcp_pos)
+        
+        # Define number of steps based on desired speed and servo_block_time
+        max_joint_diff = np.max(np.abs(target_joints - self.joint_position))
+        steps = max(int(max_joint_diff / (speed * self.servo_block_time)), 1)
+
+        # Interpolate joint positions
+        for i in range(1, steps + 1):
+            intermediate_joints = self.joint_position + (target_joints - self.joint_position) * (i / steps)
+            self._servo_j(intermediate_joints, MoveMode.ABSOLUTE)
+
+        return SUCCESSFUL_RET
+    
     def _open_gripper(self)->None:
         ret = self.set_digital_output(self.gripper_control_pin, False)
         time.sleep(self.gripper_timeout)

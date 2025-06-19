@@ -12,6 +12,7 @@ from scipy.optimize import minimize_scalar
 from jaka_interface.data_types import MoveMode
 import atexit
 from datetime import datetime
+import matplotlib.pyplot as plt
 
 MOVING = True
 
@@ -34,6 +35,7 @@ class SafeControl(Node):
 
         # Hand position and forecast
         self.hand_pos_sub = self.create_subscription(String, '/leap/fusion', self.leap_fusion_callback, 1)
+        #self.current_hand_pos = np.array([-0.4, 0.25, 0.3]) 
         self.current_hand_pos = np.zeros(3)
         self.current_hand_radius = 0.05
 
@@ -45,13 +47,13 @@ class SafeControl(Node):
         # PCBF parameters
 
         self.T = 1  # Prediction horizon
-        self.min_safety_distance = 0.025
+        self.min_safety_distance = 0.05
         self.h_max_estimate = self.current_hand_radius + self.min_safety_distance # Derived from h_func definition
-        self.m = self.h_max_estimate / self.T**2 # Barrier function parameter
+        self.m = 1#self.h_max_estimate / self.T**2 # Barrier function parameter
         self.perturb_delta = 1e-4  # For numerical gradient computation
-        self.alpha = 20       
+        self.alpha = 1e-8
         self.lamda = 10 
-        self.max_joint_vel = np.pi / 4
+        self.max_joint_vel = np.pi
         self.n_joints = 6
         self.state_len = 6
         self.workspace_limits = {
@@ -60,38 +62,45 @@ class SafeControl(Node):
             'z_min':  0.3           # don't go below table height
         }
 
-        self.home = np.array([-400, 500, 300, -np.pi, 0, -20*np.pi/180])
+        self.home = np.array([-0.400, 0.500, 0.300, -np.pi, 0, -20*np.pi/180])
 
         if MOVING:
             self.control_loop_timer = self.create_timer(1.0/120, self.control_loop) 
             self.robot.disable_servo_mode()
-            self.robot.linear_move(self.home, MoveMode.ABSOLUTE, 100, True) # FIXME
+            self.robot.linear_move(self.home, MoveMode.ABSOLUTE, 100, True)
             self.robot.enable_servo_mode()
 
         self.targetA = np.array([-0.4, 0.0, 0.3, -np.pi, 0, -20*np.pi/180])
         self.targetB = np.array([-0.4, 0.5, 0.3, -np.pi, 0, -20*np.pi/180])
         self.tcp_target = self.targetA
         self.q_target = self.robot.get_joint_position()
-        self.pos_tolerance = 1e-3
-        self.rot_tolerance = 1e-2
+        self.pos_tolerance = 5e-3
+        self.rot_tolerance = 5e-2
         self.pos_gain = 1  # position gain
         self.rot_gain = 1  # orientation gain
         self.converged = False
 
         self.t = 0
-        self.dt = 0.01
+        self.dt = 0.008
     
-
         atexit.register(self.save_data)
         self.record_leap = []
         self.record_forecast = []
+        self.h_star = []
+        self.h_now = []
+        
 
     def save_data(self):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        leap_record_filename = "./recordings/leap_data_" + timestamp
+        leap_record_filename = "./recordings/leap" + self.forecasting_method + "_data_"  + timestamp
         forecast_record_filename = "./recordings/forecast_" + self.forecasting_method + "_data_" + timestamp
-        np.save(leap_record_filename, self.record_leap)
-        np.save(forecast_record_filename, self.record_forecast)
+        #np.save(leap_record_filename, self.record_leap)
+        #np.save(forecast_record_filename, self.record_forecast)
+        #plt.plot(self.h_star, label='h_star')
+        #plt.plot(self.h_now, label='h_now')
+        #plt.legend()
+        #plt.show(block=True)
+        
 
     def control_loop(self):   
         
@@ -103,12 +112,17 @@ class SafeControl(Node):
             u_nom = self.mu_func(current_state, 0.008)
 
             u, h_star = self.calculate_u_pcbf(self.t, current_state)
+            self.h_star.append(h_star)
+            h_now = self.h_func(self.t, current_state)
+            self.h_now.append(h_now)
 
             if max(abs(u * self.dt)) > 5e-1:
                 raise RuntimeError(f"{u * self.dt}")
             
             self.q_target += u * self.dt
             h = self.h_func(self.t, self.q_target)
+            if h > 0:
+                self.loginfo('collision')
 
             self.interface.robot.servo_j(self.q_target, MoveMode.ABSOLUTE)
 
@@ -262,58 +276,37 @@ class SafeControl(Node):
         
         return eta, dx
 
-    def fzero(self, func, t1, t2, tol=1e-3, rtol=1e-2, max_iter=300):
-        """
-        use the bisection method to find a zero of *func* in [t1, t2].
-        
-        Parameters:
-            func    (callable): The function for which to find a root.
-            t1      (float): The lower bound of the interval.
-            t2      (float): The upper bound of the interval.
-            tol     (float): The tolerance for the absolute function value.
-            max_iter (int): Maximum iterations allowed.
-            
-        Returns:
-            out (float): An approximate zero of func in the interval.
-            
-        Raises:
-            ValueError: If the function does not satisfy the necessary sign conditions.
-        """
-        h1 = func(t1)
-        h2 = func(t2)
-        
-        if h1 > 0:
-            # If the function at the left end is above zero, return t1 as a trivial solution.
-            return t1
-        elif h2 < 0:
-            raise ValueError("Invalid bounds: func(t1) and func(t2) do not bracket a root.")
-
-        # Begin bisection
-        tau = (t1 + t2) / 2.0
-        h = func(tau)
-        count = 0
-
-        while abs(h) > tol:
-            count += 1
-            if h < 0:
-                t1 = tau
+    def fzero(self, func, t1, t2, tol=1e-3, max_iter=50):
+        h1, h2 = func(t1), func(t2)
+        # if no sign‐change, try to find one on a coarse grid
+        if h1 * h2 > 0:
+            xs = np.linspace(t1, t2, 20)
+            hs = [func(x) for x in xs]
+            for j in range(len(xs)-1):
+                if hs[j]*hs[j+1] <= 0:
+                    t1, t2 = xs[j], xs[j+1]
+                    h1, h2 = hs[j], hs[j+1]
+                    break
             else:
-                t2 = tau
-            tau = (t1 + t2) / 2.0
-            h = func(tau)
-            if count > max_iter:
-                # Bisection failed, if h satisfies a relaxed constraint, keep it
-                if abs(h) < rtol:
-                    return tau
-                self.loginfo(f"fzero failed:   h: {h}")
-                break
+                # still no bracket–give up and pretend safe at M1star
+                self.loginfo("fzero: no bracket found, using M1star")
+                return t1
 
-        return tau
+        # standard bisection
+        for _ in range(max_iter):
+            tm = 0.5*(t1+t2)
+            hm = func(tm)
+            if abs(hm) < tol:
+                return tm
+            if h1*hm <= 0:
+                t2, h2 = tm, hm
+            else:
+                t1, h1 = tm, hm
+        return 0.5*(t1+t2)
     
     def m_func(self, lambda_val):
-        self.m = self.h_max_estimate / self.T**2 # Recompute
-        m_val = self.m * lambda_val**2
-        dm_val = 2 * self.m * lambda_val
+        m_val = self.m * lambda_val
+        dm_val = self.m
         return m_val, dm_val
     
     def hstar_func(self, t, state):
@@ -325,11 +318,15 @@ class SafeControl(Node):
         M1star, h_of_M1star, dM1star_dx = self.find_max(t, state)
 
         # R(tau, t, x)   eqn 9        
-        if h_of_M1star <= 0: # First local maxima is safe (eqn 9, case 2)
+        if h_of_M1star <= 1e-3: # First local maxima is safe (eqn 9, case 2)
             R = M1star 
             dR_dx = dM1star_dx
         else: # First local maxima is unsafe, compute root of h before it
-            R, dR_dx = self.find_zero(M1star, t, state)
+            try:
+                R, dR_dx = self.find_zero(M1star, t, state)
+            except Exception as e:
+                self.loginfo(f"find_zero failed ({e}), falling back to R=M1star")
+                R, dR_dx = M1star, dM1star_dx
             if np.linalg.norm(dR_dx) >= 10 * np.linalg.norm(dM1star_dx):
                 # Switch to M1star when the derivative gets too large
                 dR_dx = dM1star_dx
@@ -453,7 +450,7 @@ class SafeControl(Node):
         The constraint is: dhstar_dt + dhstar_du·u + α·hstar ≥ 0.
         """
         H, dHdt, dHdu = self.hstar_func(t, state)
-        h_val = self.h_func(t, state)
+        #h_val = self.h_func(t, state)
         u_nom = self.mu_func(state)
                 
         A = dHdu
@@ -461,7 +458,7 @@ class SafeControl(Node):
         
         u = self.solve_qp(u_nom, state, A, b)
             
-        return u, h_val
+        return u, H
     
     def calculate_u_cbf(self, t, state):
         """
@@ -498,7 +495,6 @@ def main():
     interface = node.interface
     interface_thread = threading.Thread(target=spin_node, args=[interface, ], daemon=True)
     interface_thread.start()
-    
     try:
         spin_node(node)
     finally:
