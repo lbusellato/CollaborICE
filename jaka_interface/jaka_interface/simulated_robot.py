@@ -20,12 +20,10 @@ class SimulatedRobot(BaseRobot):
                  urdf_package: str='jaka_description',
                  urdf_name: str='jaka.urdf'):
 
+        super().__init__()
+
         # Simulated digital output bus
         self.dout = np.array([False] * 16)
-
-        # Simulated cartesian and joint positions
-        self.tcp_position = np.zeros(6)
-        self.joint_position = np.zeros(6)
 
         # Gripper DOUT pins
         self.gripper_power_pin = gripper_power_pin
@@ -40,7 +38,9 @@ class SimulatedRobot(BaseRobot):
         urdf_path = os.path.join(package_share_path, 'urdf', urdf_name)
         self.chain = rtb.ERobot.URDF(urdf_path)
 
-        super().__init__()
+        # Simulated cartesian and joint positions
+        self.tcp_position = np.array([-0.48195396,  0.11419133,  0.27716227, -np.pi, 0, -20*np.pi/180])
+        self.joint_position = np.array([-np.pi/4, np.pi/2, np.pi/2, np.pi/2, -np.pi/2, 0])
     
     #########################################
     #                                       #
@@ -201,6 +201,8 @@ class SimulatedRobot(BaseRobot):
             self.joint_position = joint_pos
         elif move_mode == MoveMode.INCREMENTAL:
             self.joint_position += joint_pos
+        
+        self.tcp_position = se3_to_jaka(self.kine_forward(self.joint_position))
             
         time.sleep(self.servo_block_time)
 
@@ -214,7 +216,5 @@ class SimulatedRobot(BaseRobot):
         elif move_mode == MoveMode.INCREMENTAL:
             target_tcp = curr_tcp + cartesian_pose
         target_joint = self.kine_inverse(self.joint_position, target_tcp)
-
-        time.sleep(self.servo_block_time)
 
         return self.servo_j(target_joint, MoveMode.ABSOLUTE)

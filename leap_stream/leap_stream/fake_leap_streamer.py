@@ -8,7 +8,7 @@ from std_msgs.msg import String
 
 class FakeLeapStreamer(Node):
     def __init__(self):
-        super().__init__('leap_streamer')
+        super().__init__('fake_leap_streamer')
 
         self.declare_parameter("camera_name", "desk")
         self.camera_name = self.get_parameter('camera_name').value

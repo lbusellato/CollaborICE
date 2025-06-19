@@ -116,8 +116,7 @@ class LeapVisualizer(Node):
             marker.type = Marker.SPHERE
             marker.action = Marker.ADD
 
-            if not self.fake_data:
-                pos = leap_to_jaka(pos) / 1000
+            pos = leap_to_jaka(pos) / 1000
 
             marker.pose.position = Point(x=float(pos[0]), y=float(pos[1]), z=float(pos[2]))
             marker.pose.orientation.w = 1.0

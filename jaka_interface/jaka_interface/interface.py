@@ -14,7 +14,6 @@ class JakaInterface(Node):
                  gripper_control_id: int=0, 
                  gripper_power_supply_id: int=1, 
                  use_jaka_kinematics: bool=False,
-                 publish_state: bool=False,
                  simulated: bool=False):
 
         # Init node
@@ -29,10 +28,9 @@ class JakaInterface(Node):
         else:
             self.robot = SimulatedRobot(gripper_power_supply_id, gripper_control_id)
 
-        if publish_state:
-            self.joint_state_publisher = self.create_publisher(JointState, '/joint_states', qos_profile=1)
-            self.joint_state_publisher_frequency = 30 #Hz
-            self.joint_state_publisher_timer = self.create_timer(1 / self.joint_state_publisher_frequency, 
+        self.joint_state_publisher = self.create_publisher(JointState, '/joint_states', qos_profile=1)
+        self.joint_state_publisher_frequency = 30 #Hz
+        self.joint_state_publisher_timer = self.create_timer(1 / self.joint_state_publisher_frequency, 
                                                                  self.joint_state_publisher_callback)
         
     #########################################

@@ -18,8 +18,10 @@ class SafeControl(Node):
         super().__init__('jaka_safe_control')
 
         # Init robot interface
-        self.interface = JakaInterface()
+        self.interface = JakaInterface(simulated=True)
         self.robot = self.interface.robot
+
+        self.interface.initialize()
 
         # Logging
         self.logger = self.get_logger()
@@ -84,12 +86,12 @@ class SafeControl(Node):
         if not self.converged:
             u_nom = self.mu_func(current_state, 0.008)
 
-            u, h_star = self.calculate_u_pcbf(self.t, current_state)
+            u, h_star = (np.array([0,0]),0)#self.calculate_u_pcbf(self.t, current_state)
 
             if max(abs(u * self.dt)) > 5e-1:
                 raise RuntimeError(f"{u * self.dt}")
             
-            self.q_target += u * self.dt
+            self.q_target += u_nom * self.dt
             h = self.h_func(self.t, self.q_target)
 
             self.interface.robot.servo_j(self.q_target, MoveMode.ABSOLUTE)
@@ -115,8 +117,9 @@ class SafeControl(Node):
     def leap_fusion_callback(self, msg):
         msg = json.loads(msg.data)
         hands = msg.get('hands')
-        hand = hands[0].get('hand_keypoints')
-        self.current_hand_pos = hand.get('palm_position')
+        if hands:
+            hand = hands[0].get('hand_keypoints')
+            self.current_hand_pos = hand.get('palm_position')
 
     def forecast_callback(self, msg):
         msg = json.loads(msg.data)

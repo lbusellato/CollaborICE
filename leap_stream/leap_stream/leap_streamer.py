@@ -17,12 +17,16 @@ class LeapStreamer(Node):
         self.declare_parameters(
             namespace='',
             parameters=[
-                ("camera_name", "tracking_mode"),
+                ("camera_name", "desk"),
+                ("tracking_mode", "Desktop"),
             ]
         )
 
         self.camera_name = self.get_parameter('camera_name').value
         self.tracking_mode = self.get_parameter('tracking_mode').value
+
+        if self.tracking_mode not in ['Desktop', 'Screen', 'HMD']:
+            raise ValueError(f"Unrecognized tracking mode {self.tracking_mode}. Allowed values: ['Desktop', 'Screen', 'HMD'].")
 
         self.publisher_ = self.create_publisher(String, '/leap/streamer/' + self.camera_name, 1)
         
