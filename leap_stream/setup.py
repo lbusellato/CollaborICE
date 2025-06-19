@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'leap_streamer = leap_stream.leap_streamer:main',
+            'fake_leap_streamer = leap_stream.fake_leap_streamer:main',
             'leap_visualizer = leap_stream.leap_visualizer:main',
             'leap_fusion = leap_stream.leap_fusion:main',
         ],

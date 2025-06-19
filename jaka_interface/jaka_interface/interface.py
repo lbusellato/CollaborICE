@@ -7,8 +7,6 @@ from jaka_interface.simulated_robot import SimulatedRobot
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 
-# TODO: this is basically useless. The user should take care of initializing the robot and publishing its state, if they so choose.
-
 class JakaInterface(Node):
     
     def __init__(self, 
