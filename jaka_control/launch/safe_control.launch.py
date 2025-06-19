@@ -17,6 +17,8 @@ def generate_launch_description():
         'use_joint_gui', default_value='False', description='Use Joint State Publisher GUI')
     visualize_leap_arg = DeclareLaunchArgument(
         'visualize_leap', default_value='True', description='Visualize data from a connected Leap camera')
+    simulate_robot_arg = DeclareLaunchArgument(
+        'simulated_robot', default_value='False', description='Simulate the robot')
     
     # Get package directory
     jaka_description = get_package_share_directory('jaka_description')
@@ -37,9 +39,11 @@ def generate_launch_description():
     )
 
     # Launch the JAKA Safe Control node
+    simulated_robot = LaunchConfiguration("simulated_robot")
     jaka_safe_control_node = Node(
         package='jaka_control',
         executable='safe_control',
+        parameters=[{'simulated_robot': simulated_robot}],
         output='screen',
         emulate_tty=True
     )
@@ -62,38 +66,24 @@ def generate_launch_description():
         description='Tracking mode (Desktop or HMD)'
     )
 
-    # LeapMotion streamer node
-    leap_streamer_node = Node(
-        package='leap_stream',
-        executable='leap_streamer',
-        name='leap_streamer',
-        parameters=[{
-            'frame_id': LaunchConfiguration('frame_id'),
-            'publish_rate_limit': LaunchConfiguration('publish_rate_limit'),
-            'tracking_mode': LaunchConfiguration('tracking_mode')
-        }],
-        output='screen',
-        emulate_tty=True
-    )
-
-    leap_fusion_node = Node(
-        package = 'leap_stream',
-        executable = 'leap_fusion',
-        name = 'leap_fusion',
-        output='screen',
-        emulate_tty=True
+    leap_streamer_launch = os.path.join(
+        get_package_share_directory('leap_stream'),
+        'launch',
+        'leap_streamer.launch.py'
     )
 
     return launch.LaunchDescription([
         frame_id_arg,
         publish_rate_arg,
         tracking_mode_arg,
-        leap_streamer_node,
-        leap_fusion_node,
         cbf_arch_arg,
         use_joint_gui_arg,
         visualize_leap_arg,
         use_rviz_arg,
         jaka_display_launch,
+        simulate_robot_arg,
         jaka_safe_control_node,
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(leap_streamer_launch)
+        )
     ])

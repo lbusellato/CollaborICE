@@ -20,7 +20,7 @@ def generate_launch_description():
     )
 
     fake_data_arg = DeclareLaunchArgument(
-        'fake_data', default_value='True', description='Use prerecorded data instead of connecting to a Leap camera')
+        'fake_data', default_value='False', description='Use prerecorded data instead of connecting to a Leap camera')
     fake_data = LaunchConfiguration('fake_data')
     leap_streamer_node = Node(
         package='leap_stream',
@@ -55,10 +55,19 @@ def generate_launch_description():
         emulate_tty=True
     )
 
+    leap_fusion_node = Node(
+        package = 'leap_stream',
+        executable = 'leap_fusion',
+        name = 'leap_fusion',
+        output='screen',
+        emulate_tty=True
+    )
+
     return LaunchDescription([
         camera_name_arg,
         fake_data_arg,
         tracking_mode_arg,
         leap_streamer_node,
-        fake_leap_streamer_node
+        fake_leap_streamer_node,
+        leap_fusion_node
     ])

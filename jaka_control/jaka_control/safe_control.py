@@ -11,14 +11,18 @@ import cvxpy as cp
 from scipy.optimize import minimize_scalar
 from jaka_interface.data_types import MoveMode
 
-MOVING = True
+MOVING = True  
 
 class SafeControl(Node):
     def __init__(self):
         super().__init__('jaka_safe_control')
 
+        self.logger = self.get_logger()
+
         # Init robot interface
-        self.interface = JakaInterface(simulated=True)
+        self.declare_parameter('simulated_robot', False)
+        self.loginfo(self.get_parameter('simulated_robot').value)
+        self.interface = JakaInterface(simulated=self.get_parameter('simulated_robot').value)
         self.robot = self.interface.robot
 
         self.interface.initialize()
@@ -54,14 +58,12 @@ class SafeControl(Node):
             'z_min':  0.3           # don't go below table height
         }
 
-        self.home = np.array([-0.4, 0.5, 0.3, -np.pi, 0, -20*np.pi/180])
+        self.home = np.array([-400, 500, 300, -np.pi, 0, -20*np.pi/180])
 
         if MOVING:
-            while not self.interface.joint_state_publisher.get_subscription_count():
-                rclpy.spin_once(self, timeout_sec=0.1)
             self.control_loop_timer = self.create_timer(1.0/120, self.control_loop) 
             self.robot.disable_servo_mode()
-            #self.robot.linear_move(self.home, MoveMode.ABSOLUTE, 0.1, True) # FIXME
+            self.robot.linear_move(self.home, MoveMode.ABSOLUTE, 100, True) # FIXME
             self.robot.enable_servo_mode()
 
         self.targetA = np.array([-0.4, 0.0, 0.3, -np.pi, 0, -20*np.pi/180])
@@ -70,8 +72,8 @@ class SafeControl(Node):
         self.q_target = self.robot.get_joint_position()
         self.pos_tolerance = 1e-3
         self.rot_tolerance = 1e-2
-        self.pos_gain = 1.5  # position gain
-        self.rot_gain = 1.5  # orientation gain
+        self.pos_gain = 1  # position gain
+        self.rot_gain = 1  # orientation gain
         self.converged = False
 
         self.t = 0
