@@ -10,8 +10,10 @@ from jaka_interface.pose_conversions import rpy_to_rot_matrix, leap_to_jaka
 import cvxpy as cp
 from scipy.optimize import minimize_scalar
 from jaka_interface.data_types import MoveMode
+import atexit
+from datetime import datetime
 
-MOVING = True  
+MOVING = True
 
 class SafeControl(Node):
     def __init__(self):
@@ -37,7 +39,7 @@ class SafeControl(Node):
 
         self.declare_parameter('forecasting_method', 'nn')
         self.forecasting_method = self.get_parameter('forecasting_method').value
-        self.forecast_sub = self.create_subscription(String, '/applications/hand_forecasting/' + self.forecasting_method, self.forecast_callback, 1)
+        self.forecast_sub = self.create_subscription(String, '/applications/hand_forecasting', self.forecast_callback, 1)
         self.hand_forecast = []
 
         # PCBF parameters
@@ -79,6 +81,18 @@ class SafeControl(Node):
         self.t = 0
         self.dt = 0.01
     
+
+        atexit.register(self.save_data)
+        self.record_leap = []
+        self.record_forecast = []
+
+    def save_data(self):
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        leap_record_filename = "./recordings/leap_data_" + timestamp
+        forecast_record_filename = "./recordings/forecast_" + self.forecasting_method + "_data_" + timestamp
+        np.save(leap_record_filename, self.record_leap)
+        np.save(forecast_record_filename, self.record_forecast)
+
     def control_loop(self):   
         
         self.t += self.dt
@@ -88,12 +102,12 @@ class SafeControl(Node):
         if not self.converged:
             u_nom = self.mu_func(current_state, 0.008)
 
-            u, h_star = (np.array([0,0]),0)#self.calculate_u_pcbf(self.t, current_state)
+            u, h_star = self.calculate_u_pcbf(self.t, current_state)
 
             if max(abs(u * self.dt)) > 5e-1:
                 raise RuntimeError(f"{u * self.dt}")
             
-            self.q_target += u_nom * self.dt
+            self.q_target += u * self.dt
             h = self.h_func(self.t, self.q_target)
 
             self.interface.robot.servo_j(self.q_target, MoveMode.ABSOLUTE)
@@ -117,6 +131,7 @@ class SafeControl(Node):
     # Subscriber callbacks
 
     def leap_fusion_callback(self, msg):
+        self.record_leap.append(msg)
         msg = json.loads(msg.data)
         hands = msg.get('hands')
         if hands:
@@ -124,6 +139,7 @@ class SafeControl(Node):
             self.current_hand_pos = hand.get('palm_position')
 
     def forecast_callback(self, msg):
+        self.record_forecast.append(msg)
         msg = json.loads(msg.data)
         forecast = msg.get('future_trajectory')
         forecast = [leap_to_jaka(f)/1000 for f in forecast]

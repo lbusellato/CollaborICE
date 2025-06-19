@@ -83,7 +83,8 @@ class LeapFusion(Node):
             hands_to_send.append(fused_right_hand)
         frame_data = {
             'frame_id': self.frame_counter,
-            'timestamp': current_time,
+            'tracking_frame_id': self.frame_counter,
+            'timestamp': int(current_time),
             'hands': hands_to_send
         }
         json_output = json.dumps(frame_data)

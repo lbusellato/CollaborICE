@@ -24,7 +24,7 @@ class LeapVisualizer(Node):
         )
         self.subscription_ = self.create_subscription(
             String,     
-            '/applications/hand_forecasting/nn', 
+            '/applications/hand_forecasting', 
             self.forecasting_callback, 
             10
         )

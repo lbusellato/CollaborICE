@@ -19,6 +19,8 @@ def generate_launch_description():
         'visualize_leap', default_value='True', description='Visualize data from a connected Leap camera')
     simulate_robot_arg = DeclareLaunchArgument(
         'simulated_robot', default_value='False', description='Simulate the robot')
+    forecasting_method_arg = DeclareLaunchArgument(
+        'forecasting_method', default_value='False', description='Forecasting method')
     
     # Get package directory
     jaka_description = get_package_share_directory('jaka_description')
@@ -40,10 +42,12 @@ def generate_launch_description():
 
     # Launch the JAKA Safe Control node
     simulated_robot = LaunchConfiguration("simulated_robot")
+    forecasting_method = LaunchConfiguration("forecasting_method")
     jaka_safe_control_node = Node(
         package='jaka_control',
         executable='safe_control',
-        parameters=[{'simulated_robot': simulated_robot}],
+        parameters=[{'simulated_robot': simulated_robot,
+                     'forecasting_method' : forecasting_method}],
         output='screen',
         emulate_tty=True
     )
@@ -82,6 +86,7 @@ def generate_launch_description():
         use_rviz_arg,
         jaka_display_launch,
         simulate_robot_arg,
+        forecasting_method_arg,
         jaka_safe_control_node,
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(leap_streamer_launch)
