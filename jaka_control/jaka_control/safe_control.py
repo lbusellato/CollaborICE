@@ -13,6 +13,7 @@ from jaka_interface.data_types import MoveMode
 import atexit
 from datetime import datetime
 import matplotlib.pyplot as plt
+import cProfile, pstats, io
 
 MOVING = True
 
@@ -489,6 +490,9 @@ def spin_node(node):
     executor.spin()
 
 def main():
+    pr = cProfile.Profile()
+    pr.enable()
+
     rclpy.init()
     node = SafeControl()
 
@@ -498,6 +502,11 @@ def main():
     try:
         spin_node(node)
     finally:
+        pr.disable()
+        s = io.StringIO()
+        ps = pstats.Stats(pr, stream=s).sort_stats('cumtime')
+        ps.print_stats(20)  # top 20 functions
+        print(s.getvalue())
         node.destroy_node()
         rclpy.shutdown()
 
@@ -506,6 +515,7 @@ def main():
     node.destroy_node()
 
     rclpy.shutdown()
+
 
 if __name__=='__main__':
     main()

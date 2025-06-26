@@ -20,7 +20,7 @@ def generate_launch_description():
     simulate_robot_arg = DeclareLaunchArgument(
         'simulated_robot', default_value='False', description='Simulate the robot')
     forecasting_method_arg = DeclareLaunchArgument(
-        'forecasting_method', default_value='False', description='Forecasting method')
+        'forecasting_method', default_value='nn', description='Forecasting method')
     
     # Get package directory
     jaka_description = get_package_share_directory('jaka_description')
