@@ -89,6 +89,9 @@ class SafeControl(Node):
         self.record_forecast = []
         self.h_star = []
         self.h_now = []
+
+        self._last_hq = None
+        self._last_grad = None
         
 
     def save_data(self):
@@ -107,14 +110,14 @@ class SafeControl(Node):
         
         self.t += self.dt
 
-        current_state = self.robot.get_joint_position()
+        current_q = self.robot.get_joint_position()
+        current_pose = self.robot.kine_forward(current_q)
+        J_cart     = self.robot.jacobian(current_q)
 
         if not self.converged:
-            u_nom = self.mu_func(current_state, 0.008)
-
-            u, h_star = self.calculate_u_pcbf(self.t, current_state)
+            u, h_star = self.calculate_u_pcbf(self.t, current_q, current_pose, J_cart)
             self.h_star.append(h_star)
-            h_now = self.h_func(self.t, current_state)
+            h_now = self.h_func(self.t, current_q)
             self.h_now.append(h_now)
 
             if max(abs(u * self.dt)) > 5e-1:
@@ -127,10 +130,8 @@ class SafeControl(Node):
 
             self.interface.robot.servo_j(self.q_target, MoveMode.ABSOLUTE)
 
-            tcp_pose = self.robot.kine_forward(current_state)
-
-            pos_error = np.linalg.norm(tcp_pose.t - self.tcp_target[:3])
-            current_rpy = np.array(tcp_pose.rpy())
+            pos_error = np.linalg.norm(current_pose.t - self.tcp_target[:3])
+            current_rpy = np.array(current_pose.rpy())
             rpy_error = np.array([self.angle_diff(current_rpy[i], self.tcp_target[3+i]) for i in range(3)])
             rot_error = np.linalg.norm(rpy_error)
             
@@ -213,6 +214,9 @@ class SafeControl(Node):
     
     def h_func_with_gradient(self, t, state):
         """Numerically computes the gradient of h with respect to the state q."""
+        key = (round(t,4), *np.round(state,4))
+        if self._last_hq and self._last_hq[0] == key:
+            return self._last_hq[1], self._last_grad
         h_val = self.h_func(t, state)
         dh = np.zeros(self.state_len)
         for i in range(self.state_len):
@@ -223,6 +227,8 @@ class SafeControl(Node):
             h_plus = self.h_func(t, state_plus)
             h_minus = self.h_func(t, state_minus)
             dh[i] = (h_plus - h_minus) / (2 * self.perturb_delta)
+        self._last_hq  = (key, h_val)
+        self._last_grad = dh
         return h_val, dh
 
     def path_func(self, tau, t, state):
@@ -369,13 +375,14 @@ class SafeControl(Node):
         
         return hstar, dt, du
     
-    def mu_func(self, state, dt=None):
+    def mu_func(self, state, dt=None, current_pose=None):
         """
         Nominal control law for velocity control.
         Uses a task-space proportional controller to generate a joint velocity command.
         """
         q = state
-        current_pose = self.robot.kine_forward(q)
+        if current_pose is None:
+            current_pose = self.robot.kine_forward(q)
         current_pos = current_pose.t
         target_pos = self.tcp_target[:3]
         pos_error = target_pos - current_pos
@@ -405,14 +412,13 @@ class SafeControl(Node):
         
         return q_dot_des
     
-    def solve_qp(self, u_nom, q, A, b, P=np.eye(6), F=np.zeros(6)):
+    def solve_qp(self, u_nom, tcp_pose, J_cart, A, b, P=np.eye(6), F=np.zeros(6)):
         
         u = cp.Variable(self.n_joints)
 
         objective = cp.Minimize(0.5 * cp.quad_form(u, P) + F @ u)
 
-        J_cart = self.robot.jacobian(q)
-        tcp_pos = self.robot.kine_forward(q).t
+        tcp_pos = tcp_pose.t
 
         ws = self.workspace_limits
         dt = self.dt
@@ -445,19 +451,19 @@ class SafeControl(Node):
             
         return u
 
-    def calculate_u_pcbf(self, t, state):
+    def calculate_u_pcbf(self, t, state, tcp_pose, J_cart):
         """
         Calculates the safe velocity command using a QP with the predictive CBF constraint.
         The constraint is: dhstar_dt + dhstar_du·u + α·hstar ≥ 0.
         """
         H, dHdt, dHdu = self.hstar_func(t, state)
         #h_val = self.h_func(t, state)
-        u_nom = self.mu_func(state)
+        u_nom = self.mu_func(state, current_pose=tcp_pose)
                 
         A = dHdu
         b = - self.alpha * H - dHdt
         
-        u = self.solve_qp(u_nom, state, A, b)
+        u = self.solve_qp(u_nom, tcp_pose, J_cart, A, b)
             
         return u, H
     
