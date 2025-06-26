@@ -14,6 +14,7 @@ import atexit
 from datetime import datetime
 import matplotlib.pyplot as plt
 import cProfile, pstats, io
+import time
 
 MOVING = True
 
@@ -63,7 +64,10 @@ class SafeControl(Node):
             'z_min':  0.3           # don't go below table height
         }
 
-        self.home = np.array([-0.400, 0.500, 0.300, -np.pi, 0, -20*np.pi/180])
+        if self.get_parameter('simulated_robot').value == True:
+            self.home = np.array([-0.400, 0.500, 0.300, -np.pi, 0, -20*np.pi/180])
+        else:
+            self.home = np.array([-400, 500, 300, -np.pi, 0, -20*np.pi/180])
 
         if MOVING:
             self.control_loop_timer = self.create_timer(1.0/120, self.control_loop) 
@@ -110,31 +114,18 @@ class SafeControl(Node):
         current_state = self.robot.get_joint_position()
 
         if not self.converged:
-            u_nom = self.mu_func(current_state, 0.008)
-
             u, h_star = self.calculate_u_pcbf(self.t, current_state)
-            self.h_star.append(h_star)
-            h_now = self.h_func(self.t, current_state)
-            self.h_now.append(h_now)
-
+            
             if max(abs(u * self.dt)) > 5e-1:
                 raise RuntimeError(f"{u * self.dt}")
             
             self.q_target += u * self.dt
-            h = self.h_func(self.t, self.q_target)
-            if h > 0:
-                self.loginfo('collision')
 
             self.interface.robot.servo_j(self.q_target, MoveMode.ABSOLUTE)
 
-            tcp_pose = self.robot.kine_forward(current_state)
+            tcp_pose = self.robot.get_tcp_position()
 
-            pos_error = np.linalg.norm(tcp_pose.t - self.tcp_target[:3])
-            current_rpy = np.array(tcp_pose.rpy())
-            rpy_error = np.array([self.angle_diff(current_rpy[i], self.tcp_target[3+i]) for i in range(3)])
-            rot_error = np.linalg.norm(rpy_error)
-            
-            self.converged = (pos_error < self.pos_tolerance and rot_error < self.rot_tolerance)
+            self.converged = np.allclose(tcp_pose[:3], self.tcp_target[:3], atol=5e-3)
 
         else:
             if np.allclose(self.tcp_target, self.targetA, rtol=1e-2):
@@ -142,6 +133,7 @@ class SafeControl(Node):
             else:
                 self.tcp_target = self.targetA  
             self.converged = False
+    
 
     # Subscriber callbacks
 
