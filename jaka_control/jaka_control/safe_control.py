@@ -15,6 +15,7 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import cProfile, pstats, io
 import time
+import csv
 
 MOVING = True
 
@@ -51,9 +52,9 @@ class SafeControl(Node):
         self.T = 1  # Prediction horizon
         self.min_safety_distance = 0.05
         self.h_max_estimate = self.current_hand_radius + self.min_safety_distance # Derived from h_func definition
-        self.m = 1#self.h_max_estimate / self.T**2 # Barrier function parameter
+        self.m = self.h_max_estimate / self.T**2 # Barrier function parameter
         self.perturb_delta = 1e-4  # For numerical gradient computation
-        self.alpha = 1e-8
+        self.alpha = 50
         self.lamda = 10 
         self.max_joint_vel = np.pi
         self.n_joints = 6
@@ -93,18 +94,51 @@ class SafeControl(Node):
         self.record_forecast = []
         self.h_star = []
         self.h_now = []
+        self.joint_positions = []
+        self.tcp_positions = []
+        self.hand_positions = []
+        self.future_hand_positions = []
+        self.u_nominals = []
+        self.u_actuals = []
         
 
     def save_data(self):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         leap_record_filename = "./recordings/leap" + self.forecasting_method + "_data_"  + timestamp
         forecast_record_filename = "./recordings/forecast_" + self.forecasting_method + "_data_" + timestamp
-        #np.save(leap_record_filename, self.record_leap)
-        #np.save(forecast_record_filename, self.record_forecast)
-        #plt.plot(self.h_star, label='h_star')
-        #plt.plot(self.h_now, label='h_now')
-        #plt.legend()
-        #plt.show(block=True)
+        np.save(leap_record_filename, self.record_leap)
+        np.save(forecast_record_filename, self.record_forecast)
+
+        csv_filename = f"./recordings/run_{timestamp}.csv"
+        header = ['t', 
+                  'h_star', 
+                  'h_now', 
+                  'q0', 'q1', 'q2', 'q3', 'q4', 'q5', 
+                  'tcp_x', 'tcp_y', 'tcp_z', 'tcp_rx', 'tcp_ry', 'tcp_rz', 
+                  'curr_hand_x', 'curr_hand_y', 'curr_hand_z', 
+                  'future_hand_x', 'future_hand_y', 'future_hand_z', 
+                  'u0_nominal', 'u1_nominal', 'u2_nominal', 'u3_nominal', 'u4_nominal', 'u5_nominal', 
+                  'u0_actual', 'u1_actual', 'u2_actual', 'u3_actual', 'u4_actual', 'u5_actual']
+        with open(csv_filename, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(header)
+            for i in range(len(self.h_star)):
+                q0, q1, q2, q3, q4, q5 = self.joint_positions[i]
+                tcp_x, tcp_y, tcp_z, tcp_rx, tcp_ry, tcp_rz = self.tcp_positions[i]
+                curr_hand_x, curr_hand_y, curr_hand_z = self.hand_positions[i]
+                future_hand_x, future_hand_y, future_hand_z = self.future_hand_positions[i]
+                u0_n, u1_n, u2_n, u3_n, u4_n, u5_n = self.u_nominals[i]
+                u0_a, u1_a, u2_a, u3_a, u4_a, u5_a = self.u_actuals[i]
+
+                writer.writerow([self.dt * i, 
+                                 self.h_star[i], 
+                                 self.h_now[i], 
+                                 q0, q1, q2, q3, q4, q5, 
+                                 tcp_x, tcp_y, tcp_z, tcp_rx, tcp_ry, tcp_rz, 
+                                 curr_hand_x, curr_hand_y, curr_hand_z, 
+                                 future_hand_x, future_hand_y, future_hand_z, 
+                                 u0_n, u1_n, u2_n, u3_n, u4_n, u5_n, 
+                                 u0_a, u1_a, u2_a, u3_a, u4_a, u5_a])
         
 
     def control_loop(self):   
@@ -112,18 +146,27 @@ class SafeControl(Node):
         self.t += self.dt
 
         current_state = self.robot.get_joint_position()
+        self.joint_positions.append(current_state)
+        self.hand_positions.append(self.current_hand_pos)
+        if self.hand_forecast:
+            self.future_hand_positions.append(self.hand_forecast[-1])
+        else:
+            self.future_hand_positions.append(self.current_hand_pos)
 
         if not self.converged:
             u, h_star = self.calculate_u_pcbf(self.t, current_state)
+
+            self.u_actuals.append(u)
             
             if max(abs(u * self.dt)) > 5e-1:
                 raise RuntimeError(f"{u * self.dt}")
-            
+
             self.q_target += u * self.dt
 
             self.interface.robot.servo_j(self.q_target, MoveMode.ABSOLUTE)
 
             tcp_pose = self.robot.get_tcp_position()
+            self.tcp_positions.append(tcp_pose)
 
             self.converged = np.allclose(tcp_pose[:3], self.tcp_target[:3], atol=5e-3)
 
@@ -397,22 +440,19 @@ class SafeControl(Node):
         
         return q_dot_des
     
-    def solve_qp(self, u_nom, q, A, b, P=np.eye(6), F=np.zeros(6)):
+    def solve_qp(self, u_nom, q, A, b, P=np.eye(6)):
         
         u = cp.Variable(self.n_joints)
 
-        objective = cp.Minimize(0.5 * cp.quad_form(u, P) + F @ u)
+        objective = cp.Minimize(0.5 * cp.quad_form(u - u_nom, P))
 
         J_cart = self.robot.jacobian(q)
         tcp_pos = self.robot.kine_forward(q).t
-
         ws = self.workspace_limits
         dt = self.dt
 
         constraints = [
-            A @ (u + u_nom) <= b,                                             # CBF constraint
-            (u + u_nom) >= -self.max_joint_vel,                               # max velocity constraint
-            (u + u_nom) <= self.max_joint_vel,                                # max velocity constraint
+            A @ u <= b,                                             # PCBF constraint
             J_cart[0, :] @ (u + u_nom) <= (ws['x_max'] - tcp_pos[0]) / dt,    # x max workspace limit
             -J_cart[0, :] @ (u + u_nom) <= (tcp_pos[0] - ws['x_min']) / dt,   # x min workspace limit
             J_cart[1, :] @ (u + u_nom) <= (ws['y_max'] - tcp_pos[1]) / dt,    # y max workspace limit
@@ -443,14 +483,19 @@ class SafeControl(Node):
         The constraint is: dhstar_dt + dhstar_du·u + α·hstar ≥ 0.
         """
         H, dHdt, dHdu = self.hstar_func(t, state)
-        #h_val = self.h_func(t, state)
+        h_val = self.h_func(t, state)
         u_nom = self.mu_func(state)
                 
         A = dHdu
         b = - self.alpha * H - dHdt
         
         u = self.solve_qp(u_nom, state, A, b)
-            
+        
+        self.u_actuals.append(u)
+        self.u_nominals.append(u_nom)
+        self.h_star.append(H)
+        self.h_now.append(h_val)
+
         return u, H
     
     def calculate_u_cbf(self, t, state):
@@ -469,10 +514,6 @@ class SafeControl(Node):
         
         return u, h_val   
     
-    def angle_diff(self, a, b):
-        diff = a - b
-        return np.arctan2(np.sin(diff), np.cos(diff))
-    
     def loginfo(self, msg):
         self.logger.info(str(msg))
 
@@ -482,8 +523,8 @@ def spin_node(node):
     executor.spin()
 
 def main():
-    pr = cProfile.Profile()
-    pr.enable()
+    #pr = cProfile.Profile()
+    #pr.enable()
 
     rclpy.init()
     node = SafeControl()
@@ -494,11 +535,11 @@ def main():
     try:
         spin_node(node)
     finally:
-        pr.disable()
-        s = io.StringIO()
-        ps = pstats.Stats(pr, stream=s).sort_stats('cumtime')
-        ps.print_stats(20)  # top 20 functions
-        print(s.getvalue())
+        #pr.disable()
+        #s = io.StringIO()
+        #ps = pstats.Stats(pr, stream=s).sort_stats('cumtime')
+        #ps.print_stats(20)  # top 20 functions
+        #print(s.getvalue())
         node.destroy_node()
         rclpy.shutdown()
 
