@@ -17,7 +17,7 @@ import cProfile, pstats, io
 import time
 import csv
 
-MOVING = True
+MOVING = False
 
 class SafeControl(Node):
     def __init__(self):
@@ -27,7 +27,6 @@ class SafeControl(Node):
 
         # Init robot interface
         self.declare_parameter('simulated_robot', False)
-        self.loginfo(self.get_parameter('simulated_robot').value)
         self.interface = JakaInterface(simulated=self.get_parameter('simulated_robot').value)
         self.robot = self.interface.robot
 
@@ -104,12 +103,12 @@ class SafeControl(Node):
 
     def save_data(self):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        leap_record_filename = "./recordings/leap" + self.forecasting_method + "_data_"  + timestamp
+        leap_record_filename = "./recordings/leap_" + self.forecasting_method + "_data_"  + timestamp
         forecast_record_filename = "./recordings/forecast_" + self.forecasting_method + "_data_" + timestamp
         np.save(leap_record_filename, self.record_leap)
         np.save(forecast_record_filename, self.record_forecast)
 
-        csv_filename = f"./recordings/run_{timestamp}.csv"
+        csv_filename = f"./recordings/run_{self.forecasting_method}_{timestamp}.csv"
         header = ['t', 
                   'h_star', 
                   'h_now', 

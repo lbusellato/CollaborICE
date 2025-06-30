@@ -3,7 +3,7 @@ import launch
 from ament_index_python.packages import get_package_share_directory
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import LaunchConfiguration, TextSubstitution, PythonExpression
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch_ros.actions import Node
@@ -70,10 +70,64 @@ def generate_launch_description():
         description='Tracking mode (Desktop or HMD)'
     )
 
-    leap_streamer_launch = os.path.join(
-        get_package_share_directory('leap_stream'),
-        'launch',
-        'leap_streamer.launch.py'
+    leap_streamer_launch =  IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(os.path.join(
+            get_package_share_directory('leap_stream'),
+            'launch',
+            'leap_streamer.launch.py'
+         )),
+        launch_arguments={
+            'forecasting_method': LaunchConfiguration('forecasting_method'),
+        }.items(),
+        ) 
+    
+    nn_node = Node(
+        package='forecasting',
+        executable='nn_node',
+        condition=IfCondition(
+            PythonExpression([
+                "'",
+                forecasting_method,
+                "' == 'nn'",
+            ])),
+        output='screen',
+        emulate_tty=True
+    )
+    linear_node = Node(
+        package='forecasting',
+        executable='linear_node',
+        condition=IfCondition(
+            PythonExpression([
+                "'",
+                forecasting_method,
+                "' == 'linear'",
+            ])),
+        output='screen',
+        emulate_tty=True
+    )
+    particle_node = Node(
+        package='forecasting',
+        executable='particle_node',
+        condition=IfCondition(
+            PythonExpression([
+                "'",
+                forecasting_method,
+                "' == 'particle'",
+            ])),
+        output='screen',
+        emulate_tty=True
+    )
+    kalman_node = Node(
+        package='forecasting',
+        executable='kalman_node',
+        condition=IfCondition(
+            PythonExpression([
+                "'",    
+                forecasting_method,
+                "' == 'kalman'",
+            ])),
+        output='screen',
+        emulate_tty=True
     )
 
     return launch.LaunchDescription([
@@ -87,8 +141,10 @@ def generate_launch_description():
         jaka_display_launch,
         simulate_robot_arg,
         forecasting_method_arg,
+        nn_node,
+        linear_node,
+        kalman_node,
+        particle_node,
         jaka_safe_control_node,
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(leap_streamer_launch)
-        )
+        leap_streamer_launch
     ])

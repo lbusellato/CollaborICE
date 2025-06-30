@@ -81,10 +81,13 @@ class LeapFusion(Node):
             hands_to_send.append(fused_left_hand)
         if fused_right_hand:
             hands_to_send.append(fused_right_hand)
+        sec, nsec = self.get_clock().now().seconds_nanoseconds()
+        timestamp = sec + nsec * 1e-9
         frame_data = {
             'frame_id': self.frame_counter,
             'tracking_frame_id': self.frame_counter,
-            'timestamp': int(current_time),
+            'sync_timestamp': timestamp, #FIXME ugly
+            'timestamp': int(timestamp),
             'hands': hands_to_send
         }
         json_output = json.dumps(frame_data)
@@ -96,7 +99,7 @@ class LeapFusion(Node):
 
     def fuse_data(self):
         """ Fuse the hand data from both Leap Motion devices """
-        current_time = time.time()
+        current_time = self.get_clock().now()#time.time()
         # check time
         '''if (current_time - self.last_update_leap1 >= self.time_passed and
                 current_time - self.last_update_leap2 >= self.time_passed):

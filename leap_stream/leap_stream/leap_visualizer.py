@@ -64,7 +64,6 @@ class LeapVisualizer(Node):
             marker_id = 0
             self.add_marker(marker_array, marker_id, [0,0,0], "leap", "", 0.05)
             marker_id += 1
-
             leap_data = json.loads(msg.data)  # Parse JSON
             hands = leap_data.get("hands", [])  # Extract hand data
 
