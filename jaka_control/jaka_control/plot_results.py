@@ -5,7 +5,7 @@ import matplotlib
 font = {'size'   : 22}
 matplotlib.rc('font', **font)
 
-csv_filename = f"../recordings/run_2025-06-26 12:29.csv"
+csv_filename = f"/home/jaka/ros2_ws/recordings/run_kalman_2025-07-01 13:27.csv"
 
 with open(csv_filename, 'r') as f:
     reader = csv.reader(f)
@@ -27,31 +27,31 @@ future_hand_y = data[:, 19]
 future_hand_z = data[:, 20]
 
 
-plt.subplot(311)
-plt.plot(time, tcp_x, label="TCP X")
-plt.plot(time, hand_x, label="Current Hand X")
-plt.plot(time, future_hand_x, label="Future Hand X")
-plt.grid()
-plt.legend()
-plt.ylabel("X position [m]")
-
-plt.subplot(312)
-plt.plot(time, tcp_y, label="TCP Y")
-plt.plot(time, hand_y, label="Current Hand Y")
-plt.plot(time, future_hand_y, label="Future Hand Y")
-plt.grid()
-plt.legend()
-plt.ylabel("Y position [m]")
-
-plt.subplot(313)
-plt.plot(time, tcp_z, label="TCP Z")
-plt.plot(time, hand_z, label="Current Hand Z")
-plt.plot(time, future_hand_z, label="Future Hand Z")
-plt.grid()
-plt.legend()
-plt.ylabel("Z position [m]")
-plt.xlabel('Time [s]')
-
+#plt.subplot(311)
+#plt.plot(time, tcp_x, label="TCP X")
+#plt.plot(time, hand_x, label="Current Hand X")
+#plt.plot(time, future_hand_x, label="Future Hand X")
+#plt.grid()
+#plt.legend()
+#plt.ylabel("X position [m]")
+#
+#plt.subplot(312)
+#plt.plot(time, tcp_y, label="TCP Y")
+#plt.plot(time, hand_y, label="Current Hand Y")
+#plt.plot(time, future_hand_y, label="Future Hand Y")
+#plt.grid()
+#plt.legend()
+#plt.ylabel("Y position [m]")
+#
+#plt.subplot(313)
+#plt.plot(time, tcp_z, label="TCP Z")
+#plt.plot(time, hand_z, label="Current Hand Z")
+#plt.plot(time, future_hand_z, label="Future Hand Z")
+#plt.grid()
+#plt.legend()
+#plt.ylabel("Z position [m]")
+#plt.xlabel('Time [s]')
+#
 plt.figure()
 plt.plot(time, h_star, label='H*')
 plt.plot(time, h_now, label='h')

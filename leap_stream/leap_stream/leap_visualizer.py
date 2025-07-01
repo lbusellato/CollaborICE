@@ -28,7 +28,7 @@ class LeapVisualizer(Node):
             self.forecasting_callback, 
             10
         )
-
+            
         # Publisher for visualizing hand joints as spheres in RViz
         self.marker_publisher = self.create_publisher(MarkerArray, '/leap/visualizer/current', 10)
 

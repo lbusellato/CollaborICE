@@ -6,7 +6,7 @@ from std_msgs.msg import String
 import numpy as np
 from jaka_interface.interface import JakaInterface
 import json
-from jaka_interface.pose_conversions import rpy_to_rot_matrix, leap_to_jaka
+from jaka_interface.pose_conversions import rpy_to_rot_matrix, leap_to_jaka, jaka_to_se3
 import cvxpy as cp
 from scipy.optimize import minimize_scalar
 from jaka_interface.data_types import MoveMode
@@ -16,8 +16,10 @@ import matplotlib.pyplot as plt
 import cProfile, pstats, io
 import time
 import csv
+from geometry_msgs.msg import Point, Quaternion
+from visualization_msgs.msg import Marker
 
-MOVING = False
+MOVING = True
 
 class SafeControl(Node):
     def __init__(self):
@@ -37,53 +39,82 @@ class SafeControl(Node):
 
         # Hand position and forecast
         self.hand_pos_sub = self.create_subscription(String, '/leap/fusion', self.leap_fusion_callback, 1)
-        #self.current_hand_pos = np.array([-0.4, 0.25, 0.3]) 
-        self.current_hand_pos = np.zeros(3)
+        self.current_hand_pos = None
         self.current_hand_radius = 0.05
 
         self.declare_parameter('forecasting_method', 'nn')
         self.forecasting_method = self.get_parameter('forecasting_method').value
         self.forecast_sub = self.create_subscription(String, '/applications/hand_forecasting', self.forecast_callback, 1)
-        self.hand_forecast = []
+        self.hand_forecast = [self.current_hand_pos]
+
+        # Robot bounding boxes
+        self.bb_pub = self.create_publisher(Marker, '/jaka/bounding_boxes', 1)
+        self.empty_marker = Marker()
+        self.empty_marker.header.frame_id = "world"
+        self.empty_marker.id = 0
+        self.empty_marker.ns = "robot_bb"
+        self.empty_marker.action = Marker.DELETEALL
+        self.bb_marker = Marker()
+        self.bb_marker.header.frame_id = "world"
+        self.bb_marker.header.stamp = self.get_clock().now().to_msg()
+        self.bb_marker.ns = "robot_bb"
+        self.bb_marker.id = 0
+        self.bb_marker.type = Marker.CYLINDER
+        self.bb_marker.action = Marker.ADD
+        self.bb_marker.scale.x = 0.09
+        self.bb_marker.scale.y = 0.09
+        self.bb_marker.scale.z = 0.35
+        self.bb_marker.color.a = 0.5
 
         # PCBF parameters
 
         self.T = 1  # Prediction horizon
         self.min_safety_distance = 0.05
         self.h_max_estimate = self.current_hand_radius + self.min_safety_distance # Derived from h_func definition
-        self.m = self.h_max_estimate / self.T**2 # Barrier function parameter
+        self.m = 10#self.h_max_estimate / self.T**2 # Barrier function parameter
         self.perturb_delta = 1e-4  # For numerical gradient computation
-        self.alpha = 50
-        self.lamda = 10 
-        self.max_joint_vel = np.pi
+        self.alpha = 5
+        self.lamda = 20 
+        self.max_joint_vel = np.pi / 2
         self.n_joints = 6
         self.state_len = 6
         self.workspace_limits = {
             'x_min': -0.5, 'x_max': 0.1, # don't hit the operator/camera rig
             'y_min': -0.5, 'y_max': 0.8, # don't hit the milling
-            'z_min':  0.3           # don't go below table height
+            'z_min':  0.1           # don't go below table height
         }
 
         if self.get_parameter('simulated_robot').value == True:
-            self.home = np.array([-0.400, 0.500, 0.300, -np.pi, 0, -20*np.pi/180])
+            self.home = np.array([-0.400, 0.500, 0.300, -np.pi, 0, 70*np.pi/180])
         else:
-            self.home = np.array([-400, 500, 300, -np.pi, 0, -20*np.pi/180])
+            self.home = np.array([-215, -409, 250, -np.pi, 0, 70*np.pi/180])
+
+            
+        self.approachS = np.array([-215, -409, 250, -np.pi, 0, 70*np.pi/180])
+        self.pickS = np.array([-215, -409, -20, -np.pi, 0, 70*np.pi/180])
+        self.trajS = np.array([-0.4, -0.4, 0.3, -np.pi, 0, 70*np.pi/180])
+        self.trajT = np.array([-0.4, 0.4, 0.3, -np.pi, 0, 70*np.pi/180])
 
         if MOVING:
-            self.control_loop_timer = self.create_timer(1.0/120, self.control_loop) 
+            self.robot.open_gripper()
             self.robot.disable_servo_mode()
-            self.robot.linear_move(self.home, MoveMode.ABSOLUTE, 100, True)
+            self.robot.linear_move(self.approachS, MoveMode.ABSOLUTE, 250, True)
+            self.robot.linear_move(self.pickS, MoveMode.ABSOLUTE, 250, True)
+            self.robot.close_gripper()
+            self.robot.linear_move(self.approachS, MoveMode.ABSOLUTE, 250, True)
             self.robot.enable_servo_mode()
+            self.control_loop_timer = self.create_timer(1.0/60, self.control_loop) 
 
-        self.targetA = np.array([-0.4, 0.0, 0.3, -np.pi, 0, -20*np.pi/180])
-        self.targetB = np.array([-0.4, 0.5, 0.3, -np.pi, 0, -20*np.pi/180])
-        self.tcp_target = self.targetA
+        self.tcp_target = self.trajS
         self.q_target = self.robot.get_joint_position()
-        self.pos_tolerance = 5e-3
-        self.rot_tolerance = 5e-2
-        self.pos_gain = 1  # position gain
+        self.pos_tolerance = 1e-3
+        self.rot_tolerance = 1e-2
+        self.KP_pos = 1  # position gain
         self.rot_gain = 1  # orientation gain
         self.converged = False
+        self.handover = False
+        self.prev_u = np.zeros(6)
+        self.u_smoothing = 0.5
 
         self.t = 0
         self.dt = 0.008
@@ -98,8 +129,7 @@ class SafeControl(Node):
         self.hand_positions = []
         self.future_hand_positions = []
         self.u_nominals = []
-        self.u_actuals = []
-        
+        self.u_actuals = []        
 
     def save_data(self):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -138,9 +168,13 @@ class SafeControl(Node):
                                  future_hand_x, future_hand_y, future_hand_z, 
                                  u0_n, u1_n, u2_n, u3_n, u4_n, u5_n, 
                                  u0_a, u1_a, u2_a, u3_a, u4_a, u5_a])
-        
+        self.robot.disable_robot()
+        self.robot.power_off()
+        self.robot.logout()
 
     def control_loop(self):   
+        if self.handover:
+            self.tcp_target = self.trajT
         
         self.t += self.dt
 
@@ -153,8 +187,9 @@ class SafeControl(Node):
             self.future_hand_positions.append(self.current_hand_pos)
 
         if not self.converged:
-            u, h_star = self.calculate_u_pcbf(self.t, current_state)
-
+            # TODO parametrize which method to use
+            u = self.calculate_u_cbf(self.t, current_state)
+            
             self.u_actuals.append(u)
             
             if max(abs(u * self.dt)) > 5e-1:
@@ -165,16 +200,21 @@ class SafeControl(Node):
             self.interface.robot.servo_j(self.q_target, MoveMode.ABSOLUTE)
 
             tcp_pose = self.robot.get_tcp_position()
+            tcp_pose[0] /= 1000
+            tcp_pose[1] /= 1000
+            tcp_pose[2] /= 1000
             self.tcp_positions.append(tcp_pose)
 
-            self.converged = np.allclose(tcp_pose[:3], self.tcp_target[:3], atol=5e-3)
+            self.converged = np.allclose(tcp_pose[:3], self.tcp_target[:3], atol=self.pos_tolerance)
 
         else:
-            if np.allclose(self.tcp_target, self.targetA, rtol=1e-2):
-                self.tcp_target = self.targetB
+            if not self.handover:
+                self.converged = False
+                self.tcp_target = self.trajT
+                self.handover = True
             else:
-                self.tcp_target = self.targetA  
-            self.converged = False
+                self.robot.open_gripper()
+                self.control_loop_timer.cancel()
     
 
     # Subscriber callbacks
@@ -183,9 +223,21 @@ class SafeControl(Node):
         self.record_leap.append(msg)
         msg = json.loads(msg.data)
         hands = msg.get('hands')
+        self.current_hand_pos = None
         if hands:
-            hand = hands[0].get('hand_keypoints')
-            self.current_hand_pos = hand.get('palm_position')
+            for h in hands:
+                if h.get('confidence') > 0.50:
+                    if h.get('hand_type')=='right':
+                        hand = hands[0].get('hand_keypoints')
+                        self.current_hand_pos = leap_to_jaka(hand.get('palm_position'))/1000
+                    elif h.get('hand_type')=='left':
+                        hand = hands[0].get('hand_keypoints')
+                        target_pos = leap_to_jaka(hand.get('palm_position'))/1000
+                        self.trajT[:3] = target_pos[:3]
+                        self.trajT[2] += 0.05
+                        self.pos_tolerance = 5e-3
+
+        self.hand_forecast[0] = self.current_hand_pos
 
     def forecast_callback(self, msg):
         self.record_forecast.append(msg)
@@ -198,25 +250,15 @@ class SafeControl(Node):
     def get_updated_obstacle(self, t):
         u = (t - self.t) / self.T        
         n = len(self.hand_forecast)
-        if n > 0:
-            idx = int(np.floor(u * (n - 1)))
-            idx = max(0, min(idx, n - 1))
-            obstacle_pos = self.hand_forecast[idx]
-        else:
-            obstacle_pos = self.current_hand_pos
-
+        idx = int(np.floor(u * (n - 1)))
+        idx = max(0, min(idx, n - 1))
+        obstacle_pos = self.hand_forecast[idx]
         obstacle_radius = self.current_hand_radius
         
         return obstacle_pos, obstacle_radius    
 
     def h_func(self, t, state):
-        """
-        Computes the safety margin between a dynamic spherical obstacle and 
-        a cylindrical end-effector (EE) volume centered at the TCP.
-
-        The cylinder is aligned with the TCP z-axis, has height h_cyl, and radius r_cyl.
-        """
-        # EE shape
+        
         r_cyl = 0.045  # cylinder radius [m]
         h_cyl = 0.35   # cylinder height [m]
 
@@ -414,7 +456,6 @@ class SafeControl(Node):
         target_pos = self.tcp_target[:3]
         pos_error = target_pos - current_pos
         pos_error_mag = np.linalg.norm(pos_error)
-
         rot_current = rpy_to_rot_matrix(current_pose.rpy())
         rot_target = rpy_to_rot_matrix(self.tcp_target[3:6])
         rot_error_mat = rot_target.dot(rot_current.T)
@@ -428,22 +469,24 @@ class SafeControl(Node):
         v_cmd = np.zeros(6)
         
         if pos_error_mag > self.pos_tolerance:
-            v_cmd[:3] = self.pos_gain * pos_error
+            v_cmd[:3] = self.KP_pos * pos_error
         
         if rot_error_norm > self.rot_tolerance:
             v_cmd[3:] = self.rot_gain * rot_error
             
         J = self.robot.jacobian(q)
         J_pinv = np.linalg.pinv(J)
-        q_dot_des = J_pinv @ v_cmd
+        u = J_pinv @ v_cmd
         
-        return q_dot_des
+        u = self.u_smoothing * u + (1 - self.u_smoothing) * self.prev_u
+        self.prev_u = u
+
+        return u
     
-    def solve_qp(self, u_nom, q, A, b, P=np.eye(6)):
-        
+    def solve_qp(self, u_nom, q, A, b): 
         u = cp.Variable(self.n_joints)
 
-        objective = cp.Minimize(0.5 * cp.quad_form(u - u_nom, P))
+        objective = cp.Minimize(cp.sum_squares(u))
 
         J_cart = self.robot.jacobian(q)
         tcp_pos = self.robot.kine_forward(q).t
@@ -481,9 +524,12 @@ class SafeControl(Node):
         Calculates the safe velocity command using a QP with the predictive CBF constraint.
         The constraint is: dhstar_dt + dhstar_du·u + α·hstar ≥ 0.
         """
+        u_nom = self.mu_func(state)
+        if self.current_hand_pos is None:
+            return u_nom
+        
         H, dHdt, dHdu = self.hstar_func(t, state)
         h_val = self.h_func(t, state)
-        u_nom = self.mu_func(state)
                 
         A = dHdu
         b = - self.alpha * H - dHdt
@@ -495,23 +541,30 @@ class SafeControl(Node):
         self.h_star.append(H)
         self.h_now.append(h_val)
 
-        return u, H
+        return u
     
     def calculate_u_cbf(self, t, state):
         """
         CBF-based velocity control for single integrator dynamics.
         Enforces: ∇h(q)·u + α·h(q) ≥ 0.
         """
-        
-        h_val, grad_h_q = self.h_func_with_gradient(t, state)
         u_nom = self.mu_func(state)
+        if self.current_hand_pos is None:
+            return u_nom
+            
+        h_val, grad_h_q = self.h_func_with_gradient(t, state)
         
         A = grad_h_q
         b = -self.lamda * h_val
 
         u = self.solve_qp(u_nom, state, A, b)
         
-        return u, h_val   
+        self.u_actuals.append(u)
+        self.u_nominals.append(u_nom)
+        self.h_star.append(0)
+        self.h_now.append(h_val)
+        
+        return u  
     
     def loginfo(self, msg):
         self.logger.info(str(msg))
