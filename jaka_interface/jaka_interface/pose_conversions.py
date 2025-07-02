@@ -24,7 +24,7 @@ def jaka_to_se3(jaka_pose: list)->SE3:
     SE3
         The converted pose.
     """
-    return SE3(*jaka_pose[:3]) * SE3.RPY(*jaka_pose[3:])
+    return SE3(*(np.array(jaka_pose[:3])/1000)) * SE3.RPY(*jaka_pose[3:])
 
 def se3_to_jaka(se3_pose: SE3)->list:
     """Convert a pose from SE3 format to jaka format.
