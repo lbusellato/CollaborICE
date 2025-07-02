@@ -151,8 +151,15 @@ class LeapVisualizer(Node):
 def main():
     rclpy.init()
     node = LeapVisualizer()
-    rclpy.spin(node)
-    rclpy.shutdown()
+
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()  # Clean up resources
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__ == "__main__":
     main()

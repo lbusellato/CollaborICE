@@ -40,9 +40,12 @@ class LeapStreamer(Node):
             else:
                 tracking_mode = leap.TrackingMode.ScreenTop
             self.connection.set_tracking_mode(tracking_mode)
-            while True:
-                time.sleep(1)
-
+            
+            try:
+                while rclpy.ok():
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                pass
 
 def convert_vector_to_list(vector, scale_factor=1000.0):
     """
@@ -141,7 +144,7 @@ class MyListener(leap.Listener):
         self.frame_counter = 0
 
     def on_connection_event(self, event):
-        print("Connected")
+        self.logger.debug('Connected')
 
     def on_tracking_event(self, event):
         self.logger.debug("Tracking event: " +  str(event.timestamp) + " hands: " + str(len(event.hands)))
@@ -156,7 +159,7 @@ def main():
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        node.get_logger().info("Shutting down")
+        pass
     finally:
         node.destroy_node()  # Clean up resources
         if rclpy.ok():

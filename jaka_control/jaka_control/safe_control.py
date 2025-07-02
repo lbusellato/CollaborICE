@@ -30,7 +30,7 @@ class SafeControl(Node):
         else:
             self.robot = SimulatedRobot()
 
-        self.initialize()
+        self.robot.initialize()
 
         # Logging
         self.logger = self.get_logger()
@@ -141,18 +141,6 @@ class SafeControl(Node):
         msg.position = self.robot.get_joint_position()
         self.joint_state_publisher.publish(msg)
 
-    def initialize(self):
-        self.robot.login()
-        # Get the initial status
-        self.robot.update_status()
-        self.robot.power_on()
-        self.robot.enable_robot()
-
-    def shutdown(self):
-        self.robot.disable_robot()
-        self.robot.power_off()
-        self.robot.logout()
-
     def save_data(self):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         leap_record_filename = "./recordings/leap_" + self.forecasting_method + "_data_"  + timestamp
@@ -190,9 +178,7 @@ class SafeControl(Node):
                                  future_hand_x, future_hand_y, future_hand_z, 
                                  u0_n, u1_n, u2_n, u3_n, u4_n, u5_n, 
                                  u0_a, u1_a, u2_a, u3_a, u4_a, u5_a])
-        self.robot.disable_robot()
-        self.robot.power_off()
-        self.robot.logout()
+        self.robot.shutdown()
 
     def control_loop(self):   
         if self.handover:
@@ -210,7 +196,7 @@ class SafeControl(Node):
 
         if not self.converged:
             # TODO parametrize which method to use
-            u = self.calculate_u_cbf(self.t, current_state)
+            u = self.calculate_u_pcbf(self.t, current_state)
             
             self.u_actuals.append(u)
             
@@ -598,7 +584,7 @@ def main():
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        node.get_logger().info("Shutting down")
+        pass
     finally:
         node.destroy_node()
         

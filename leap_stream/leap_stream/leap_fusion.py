@@ -137,14 +137,14 @@ class LeapFusion(Node):
 def main(args=None):
 
     rclpy.init(args=args)
-    leap_fusion = LeapFusion()
+    node = LeapFusion()
 
     try:
-        rclpy.spin(leap_fusion)
+        rclpy.spin(node)
     except KeyboardInterrupt:
-        leap_fusion.get_logger().info("Shutting down")
+        pass
     finally:
-        leap_fusion.destroy_node()  # Clean up resources
+        node.destroy_node()  # Clean up resources
         if rclpy.ok():
             rclpy.shutdown()
 

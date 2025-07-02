@@ -46,6 +46,25 @@ class BaseRobot():
         if cls.__doc__ is None:
             cls.__doc__ = BaseRobot.__doc__
 
+    def initialize(self):
+        try:
+            self.login()
+            # Get the initial status
+            self.update_status()
+            self.power_on()
+            self.enable_robot()
+        except KeyboardInterrupt:
+            pass
+
+    def shutdown(self):
+        try:
+            pass
+            #self.disable_robot()
+            #self.power_off()
+            #self.logout()
+        except KeyboardInterrupt:
+            pass
+
     #########################################
     #                                       #
     # Basic operation of robots             #
@@ -85,20 +104,18 @@ class BaseRobot():
         raise NotImplementedError(f"{inspect.currentframe().f_code.co_name} is not implemented")
 
     @process_sdk_call(connected=True)    
-    def servo_move_enable(self, value: bool, reserved: bool=True)->None:
+    def servo_move_enable(self, value: bool)->None:
         """Enable or disable servo mode.
 
         Parameters
         ----------
         value : bool
             Whether to enable servo mode.
-        reserved : bool
-            Reserved.
         """
-        if reserved:
-            msg = 'You should not directly call servo_move_enable, because it does not update the robot state. This can\
-                and will lead to undefined, unstable and potentially dangerous behaviour.'
-            rclpy.logging.get_logger('BaseRobot').warning(msg)
+        
+        msg = 'You should not directly call servo_move_enable, because it does not update the robot state. This can\
+            and will lead to undefined, unstable and potentially dangerous behaviour.'
+        rclpy.logging.get_logger('BaseRobot').warning(msg)
         return self._servo_move_enable(value)
     def _servo_move_enable(self, value: bool)->None:
         raise NotImplementedError(f"{inspect.currentframe().f_code.co_name} is not implemented")
@@ -135,7 +152,7 @@ class BaseRobot():
     def _enable_robot(self)->None:
         raise NotImplementedError(f"{inspect.currentframe().f_code.co_name} is not implemented")
 
-    @process_sdk_call(powered_on=True, update_context='state', update_attr='is_enabled', update_mode=3, update_val=False, success_log_msg='Disabeld robot.')
+    @process_sdk_call(powered_on=True, update_context='state', update_attr='is_enabled', update_mode=3, update_val=False, success_log_msg='Disabled robot.')
     def disable_robot(self)->None:
         """Disables the robot.
         """
@@ -409,6 +426,12 @@ class BaseRobot():
     # Set and interrogate robot information #
     #                                       #
     #########################################
+
+    def update_status(self) -> None:
+        "Update self.state"
+        return self._update_status
+    def _update_status(self) -> None:
+        raise NotImplementedError(f"{inspect.currentframe().f_code.co_name} is not implemented")
 
     @process_sdk_call(connected=True)
     def get_robot_status_simple(self) -> tuple:
@@ -1984,8 +2007,8 @@ class RealRobot(BaseRobot):
     
     def __init__(self, 
                  ip: str='10.5.5.100',
-                 gripper_power_pin: int = 0,
-                 gripper_control_pin: int = 1,
+                 gripper_power_pin: int = 1,
+                 gripper_control_pin: int = 0,
                  gripper_timeout: float = 0.5,
                  use_jaka_kinematics: bool=False,
                  urdf_package: str='jaka_description',
@@ -2282,7 +2305,7 @@ class RealRobot(BaseRobot):
     #                                       #
     #########################################
 
-    def update_status(self)->None:
+    def _update_status(self)->None:
         """Update the state variables of the robot.
         """
         robot_status = self.get_robot_status()
@@ -3750,8 +3773,8 @@ class RealRobot(BaseRobot):
 class SimulatedRobot(BaseRobot):
 
     def __init__(self,
-                 gripper_power_pin: int = 0,
-                 gripper_control_pin: int = 1,
+                 gripper_power_pin: int = 1,
+                 gripper_control_pin: int = 0,
                  gripper_timeout: float = 0.5,
                  urdf_package: str='jaka_description',
                  urdf_name: str='jaka.urdf'):
