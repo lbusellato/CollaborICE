@@ -135,11 +135,18 @@ class LeapFusion(Node):
 
 
 def main(args=None):
+
     rclpy.init(args=args)
     leap_fusion = LeapFusion()
-    rclpy.spin(leap_fusion)
-    leap_fusion.destroy_node()
-    rclpy.shutdown()
+
+    try:
+        rclpy.spin(leap_fusion)
+    except KeyboardInterrupt:
+        leap_fusion.get_logger().info("Shutting down")
+    finally:
+        leap_fusion.destroy_node()  # Clean up resources
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

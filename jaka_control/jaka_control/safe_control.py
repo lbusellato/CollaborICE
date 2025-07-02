@@ -1,42 +1,45 @@
 import rclpy
 from rclpy.node import Node
-import threading
-from rclpy.executors import SingleThreadedExecutor
 from std_msgs.msg import String
 import numpy as np
-from jaka_interface.interface import JakaInterface
 import json
-from jaka_interface.pose_conversions import rpy_to_rot_matrix, leap_to_jaka, jaka_to_se3
+from jaka_interface.pose_conversions import rpy_to_rot_matrix, leap_to_jaka
 import cvxpy as cp
 from scipy.optimize import minimize_scalar
 from jaka_interface.data_types import MoveMode
 import atexit
 from datetime import datetime
-import matplotlib.pyplot as plt
-import cProfile, pstats, io
-import time
 import csv
-from geometry_msgs.msg import Point, Quaternion
 from visualization_msgs.msg import Marker
+from jaka_interface.robots import RealRobot, SimulatedRobot
+from sensor_msgs.msg import JointState
 
 MOVING = True
 
 class SafeControl(Node):
     def __init__(self):
-        super().__init__('jaka_safe_control')
+        super().__init__('jaka_control')
 
         self.logger = self.get_logger()
 
         # Init robot interface
         self.declare_parameter('simulated_robot', False)
-        self.interface = JakaInterface(simulated=self.get_parameter('simulated_robot').value)
-        self.robot = self.interface.robot
+        self.simulated = self.get_parameter('simulated_robot').value
+        if not self.simulated:
+            self.robot = RealRobot()
+        else:
+            self.robot = SimulatedRobot()
 
-        self.interface.initialize()
+        self.initialize()
 
         # Logging
         self.logger = self.get_logger()
 
+        self.joint_state_publisher = self.create_publisher(JointState, '/joint_states', qos_profile=1)
+        self.joint_state_publisher_frequency = 30 #Hz
+        self.joint_state_publisher_timer = self.create_timer(1 / self.joint_state_publisher_frequency, 
+                                                                 self.joint_state_publisher_callback)
+        
         # Hand position and forecast
         self.hand_pos_sub = self.create_subscription(String, '/leap/fusion', self.leap_fusion_callback, 1)
         self.current_hand_pos = None
@@ -131,6 +134,25 @@ class SafeControl(Node):
         self.u_nominals = []
         self.u_actuals = []        
 
+    def joint_state_publisher_callback(self):
+        msg = JointState()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.name = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
+        msg.position = self.robot.get_joint_position()
+        self.joint_state_publisher.publish(msg)
+
+    def initialize(self):
+        self.robot.login()
+        # Get the initial status
+        self.robot.update_status()
+        self.robot.power_on()
+        self.robot.enable_robot()
+
+    def shutdown(self):
+        self.robot.disable_robot()
+        self.robot.power_off()
+        self.robot.logout()
+
     def save_data(self):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         leap_record_filename = "./recordings/leap_" + self.forecasting_method + "_data_"  + timestamp
@@ -197,7 +219,7 @@ class SafeControl(Node):
 
             self.q_target += u * self.dt
 
-            self.interface.robot.servo_j(self.q_target, MoveMode.ABSOLUTE)
+            self.robot.servo_j(self.q_target, MoveMode.ABSOLUTE)
 
             tcp_pose = self.robot.get_tcp_position()
             tcp_pose[0] /= 1000
@@ -569,37 +591,19 @@ class SafeControl(Node):
     def loginfo(self, msg):
         self.logger.info(str(msg))
 
-def spin_node(node):
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-    executor.spin()
-
 def main():
-    #pr = cProfile.Profile()
-    #pr.enable()
-
     rclpy.init()
     node = SafeControl()
 
-    interface = node.interface
-    interface_thread = threading.Thread(target=spin_node, args=[interface, ], daemon=True)
-    interface_thread.start()
     try:
-        spin_node(node)
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        node.get_logger().info("Shutting down")
     finally:
-        #pr.disable()
-        #s = io.StringIO()
-        #ps = pstats.Stats(pr, stream=s).sort_stats('cumtime')
-        #ps.print_stats(20)  # top 20 functions
-        #print(s.getvalue())
         node.destroy_node()
-        rclpy.shutdown()
-
-    interface_thread.join()
-    interface.destroy_node()
-    node.destroy_node()
-
-    rclpy.shutdown()
+        
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__=='__main__':

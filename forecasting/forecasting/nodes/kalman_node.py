@@ -159,12 +159,16 @@ def main():
     args, _ = parse_args()
     rclpy.init()
     node = KalmanNode(name="kalman_forecasting_node", target_hz=args.hz, debug=args.debug, publish_topic_name=args.topic_name)
+    
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        pass
-    node.destroy_node()
-    rclpy.shutdown()
+        pass 
+    finally:
+        node.destroy_node()
+    
+    if rclpy.ok():
+        rclpy.shutdown()
 
 
 if __name__ == "__main__":

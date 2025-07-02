@@ -43,6 +43,7 @@ class LeapStreamer(Node):
             while True:
                 time.sleep(1)
 
+
 def convert_vector_to_list(vector, scale_factor=1000.0):
     """
     Convert LeapMotion vector to list
@@ -151,8 +152,15 @@ class MyListener(leap.Listener):
 def main():
     rclpy.init()
     node = LeapStreamer()
-    rclpy.spin(node)
-    rclpy.shutdown()
+
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        node.get_logger().info("Shutting down")
+    finally:
+        node.destroy_node()  # Clean up resources
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
