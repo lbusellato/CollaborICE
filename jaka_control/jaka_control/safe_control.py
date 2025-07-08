@@ -94,6 +94,8 @@ class SafeControl(Node):
         }
         self.prev_u = np.zeros(6)
         self.u_smooth = 0.5
+        self.slack_penalty = 10
+        self.sigma_penalty = 1
 
         if self.get_parameter('simulated_robot').value == True:
             self.home = np.array([-0.400, 0.500, 0.300, -np.pi, 0, 70*np.pi/180])
@@ -233,8 +235,7 @@ class SafeControl(Node):
                 self.bb_pub.publish(self.bb_marker)
 
             if not self.converged:
-                u = self.calculate_u_cbf(self.t, current_state)
-                u = self.calculate_u_pcbf(self.t, current_state, u)
+                u = self.calculate_u_uapcbf(self.t, current_state)
 
                 u = self.u_smooth * u + (1 - self.u_smooth) * self.prev_u
                 self.prev_u = u
@@ -324,11 +325,16 @@ class SafeControl(Node):
         proj_length_clamped = np.clip(proj_length, 0, np.linalg.norm(axis_vec))
         closest_point_on_axis = tcp_pos + proj_length_clamped * axis_dir
 
+        # Uncertainty handling: project sigma onto the direction from obstacle to tcp, use that as dynamic, uncertain margin
+        d_unit = vec_to_obs / np.linalg.norm(vec_to_obs)
+        sigma = np.array([0, 0, 0])
+        sigma_dir = np.sqrt(np.sum((d_unit**2) * (sigma**2)))
+
         # Distance from obstacle to closest surface point on the cylinder
         dist_to_cylinder_surface = np.linalg.norm(obstacle_pos - closest_point_on_axis) - r_cyl
 
         # Safety margin
-        return (self.min_safety_distance + obstacle_radius) - dist_to_cylinder_surface
+        return (self.min_safety_distance + obstacle_radius + self.sigma_penalty * sigma_dir) - dist_to_cylinder_surface
     
     def h_func_with_gradient(self, t, state):
         """Numerically computes the gradient of h with respect to the state q."""
@@ -528,19 +534,7 @@ class SafeControl(Node):
 
         objective = cp.Minimize(cp.sum_squares(u))
 
-        J_cart = self.robot.jacobian(q)
-        tcp_pos = self.robot.kine_forward(q).t
-        ws = self.workspace_limits
-        dt = self.dt
-
-        constraints = [
-            A @ u <= b,                                             # PCBF constraint
-            J_cart[0, :] @ (u + u_nom) <= (ws['x_max'] - tcp_pos[0]) / dt,    # x max workspace limit
-            -J_cart[0, :] @ (u + u_nom) <= (tcp_pos[0] - ws['x_min']) / dt,   # x min workspace limit
-            J_cart[1, :] @ (u + u_nom) <= (ws['y_max'] - tcp_pos[1]) / dt,    # y max workspace limit
-            -J_cart[1, :] @ (u + u_nom) <= (tcp_pos[1] - ws['y_min']) / dt,   # y min workspace limit
-            -J_cart[2, :] @ (u + u_nom) <= (tcp_pos[2] - ws['z_min']) / dt,   # z min workspace limit
-            ]
+        constraints = [A @ u <= b]
         
         problem = cp.Problem(objective, constraints)
 
@@ -557,6 +551,60 @@ class SafeControl(Node):
 
         u = u_nom + u_safe
             
+        return u
+    
+    def solve_qp_mult(self, u_nom, As, bs): 
+        u = cp.Variable(self.n_joints)
+
+        delta = cp.Variable(2, nonneg=True) 
+
+        objective = cp.Minimize(cp.sum_squares(u) + self.slack_penalty*cp.sum_squares(delta))
+
+        constraints = []
+        for A, b, d in zip(As, bs, delta):
+            constraints.append(A @ u <= b + d)
+        
+        problem = cp.Problem(objective, constraints)
+
+        # Naive safety: stop the robot
+        u_safe = -u_nom 
+        try:
+            problem.solve(solver=cp.OSQP)
+            if u.value is None or np.any(np.isnan(u.value)):
+                self.loginfo("QP failed")
+            else:
+                u_safe = u.value
+        except Exception as e:
+            self.loginfo(f"QP solver error: {e}")
+
+        u = u_nom + u_safe
+            
+        return u
+
+    def calculate_u_uapcbf(self, t, state):
+        u_nom = self.mu_func(state)
+        if self.current_hand_pos is None:
+            return u_nom
+        
+        # PCBF
+        H, dHdt, dHdu = self.hstar_func(t, state)
+                
+        A_pcbf = dHdu
+        b_pcbf = - self.alpha * H - dHdt
+        
+        # CBF
+        h_val, grad_h_q = self.h_func_with_gradient(t, state)
+        
+        A_cbf = grad_h_q
+        b_cbf = -self.lamda * h_val
+
+        u = self.solve_qp_mult(u_nom, [A_pcbf, A_cbf], [b_pcbf, b_cbf])
+        
+        self.u_actuals.append(u)
+        self.u_nominals.append(u_nom)
+        self.h_star.append(H)
+        self.h_now.append(h_val)
+
         return u
 
     def calculate_u_pcbf(self, t, state, u_nom):
