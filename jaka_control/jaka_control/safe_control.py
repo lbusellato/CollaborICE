@@ -1,4 +1,3 @@
-import atexit
 import csv
 import cvxpy as cp
 import json
@@ -78,12 +77,12 @@ class SafeControl(Node):
         # PCBF parameters
 
         self.T = 1  # Prediction horizon
-        self.min_safety_distance = 0.1
+        self.min_safety_distance = 0.15
         self.h_max_estimate = self.current_hand_radius + self.min_safety_distance # Derived from h_func definition
-        self.m = 0.75#self.h_max_estimate / self.T**2 # Barrier function parameter
+        self.m = 15#self.h_max_estimate / self.T**2 # Barrier function parameter
         self.perturb_delta = 1e-4  # For numerical gradient computation
-        self.alpha = 25
-        self.lamda = 50 
+        self.alpha = 40
+        self.lamda = self.alpha 
         self.max_joint_vel = np.pi / 2
         self.n_joints = 6
         self.state_len = 6
@@ -98,11 +97,12 @@ class SafeControl(Node):
         if self.get_parameter('simulated_robot').value == True:
             self.home = np.array([-0.400, 0.500, 0.300, -np.pi, 0, 70*np.pi/180])
         else:
-            self.home = np.array([-215, -409, 250, -np.pi, 0, 70*np.pi/180])
+            self.home = np.array([-215, -409, 300, -np.pi, 0, 70*np.pi/180])
 
             
-        self.approachS = np.array([-215, -409, 250, -np.pi, 0, 70*np.pi/180])
+        self.approachS = np.array([-215, -409, 300, -np.pi, 0, 70*np.pi/180])
         self.pickS = np.array([-215, -409, -20, -np.pi, 0, 70*np.pi/180])
+        self.trajS = np.array([-400, -409, 300, -np.pi, 0, 70*np.pi/180])
         self.trajT = np.array([-0.4, 0.4, 0.3, -np.pi, 0, 70*np.pi/180])
 
         self.tcp_target = self.trajT
@@ -117,7 +117,6 @@ class SafeControl(Node):
         self.t = 0
         self.dt = 0.008
     
-        atexit.register(self.save_data)
         self.record_leap = []
         self.record_forecast = []
         self.h_star = []
@@ -141,8 +140,8 @@ class SafeControl(Node):
 
     def save_data(self):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        leap_record_filename = "./recordings/leap_" + self.forecasting_method + "_data_"  + timestamp
-        forecast_record_filename = "./recordings/forecast_" + self.forecasting_method + "_data_" + timestamp
+        leap_record_filename = "./recordings/leap_" + self.forecasting_method + "_data_m"  + self.m + "_a" + self.alpha + "_l" + self.lamda + "_" + timestamp
+        forecast_record_filename = "./recordings/forecast_" + self.forecasting_method + "_data_m"  + self.m + "_a" + self.alpha + "_l" + self.lamda + "_" + timestamp
         np.save(leap_record_filename, self.record_leap)
         np.save(forecast_record_filename, self.record_forecast)
 
@@ -159,11 +158,17 @@ class SafeControl(Node):
         with open(csv_filename, mode='w', newline='') as file:
             writer = csv.writer(file)
             writer.writerow(header)
-            for i in range(len(self.h_star)):
+            for i in range(len(self.h_star) - 1): # FIXME why different lens?
                 q0, q1, q2, q3, q4, q5 = self.joint_positions[i]
                 tcp_x, tcp_y, tcp_z, tcp_rx, tcp_ry, tcp_rz = self.tcp_positions[i]
-                curr_hand_x, curr_hand_y, curr_hand_z = self.hand_positions[i]
-                future_hand_x, future_hand_y, future_hand_z = self.future_hand_positions[i]
+                if self.hand_positions[i] is not None:
+                    curr_hand_x, curr_hand_y, curr_hand_z = self.hand_positions[i]
+                else:
+                    curr_hand_x, curr_hand_y, curr_hand_z = np.zeros(3)
+                if self.future_hand_positions[i] is not None:
+                    future_hand_x, future_hand_y, future_hand_z = self.future_hand_positions[i]
+                else:
+                    future_hand_x, future_hand_y, future_hand_z = np.zeros(3)
                 u0_n, u1_n, u2_n, u3_n, u4_n, u5_n = self.u_nominals[i]
                 u0_a, u1_a, u2_a, u3_a, u4_a, u5_a = self.u_actuals[i]
 
@@ -188,6 +193,7 @@ class SafeControl(Node):
                 self.robot.linear_move(self.pickS, MoveMode.ABSOLUTE, 250, True)
                 self.robot.close_gripper()
                 self.robot.linear_move(self.approachS, MoveMode.ABSOLUTE, 250, True)
+                self.robot.linear_move(self.trajS, MoveMode.ABSOLUTE, 250, True)
                 self.robot.enable_servo_mode()
                 self.homed = True
                 self.q_target = self.robot.get_joint_position()
@@ -239,11 +245,14 @@ class SafeControl(Node):
                 u = self.u_smooth * u + (1 - self.u_smooth) * self.prev_u
                 self.prev_u = u
                 
+                if np.max(np.abs(u * self.dt)) > self.max_joint_vel:
+                    raise ValueError(f"{u}")
+
                 self.u_actuals.append(u)
                 
                 self.q_target += u * self.dt
 
-                self.robot.servo_j(self.q_target, MoveMode.ABSOLUTE)
+                #self.robot.servo_j(self.q_target, MoveMode.ABSOLUTE)
 
                 tcp_pose = self.robot.get_tcp_position()
                 tcp_pose[0] /= 1000
@@ -278,7 +287,7 @@ class SafeControl(Node):
                         target_pos = leap_to_jaka(hand.get('palm_position'))/1000
                         self.trajT[:3] = target_pos[:3]
                         self.trajT[2] += 0.05
-                        self.pos_tolerance = 5e-3
+                        self.pos_tolerance = 7e-3
 
         self.hand_forecast[0] = self.current_hand_pos
 
@@ -409,7 +418,8 @@ class SafeControl(Node):
                     break
             else:
                 # still no bracket–give up and pretend safe at M1star
-                self.loginfo("fzero: no bracket found, using M1star")
+                # TODO set up logging level
+                #self.logger.debug("fzero: no bracket found, using M1star")
                 return t1
 
         # standard bisection
@@ -425,8 +435,8 @@ class SafeControl(Node):
         return 0.5*(t1+t2)
     
     def m_func(self, lambda_val):
-        m_val = self.m * lambda_val
-        dm_val = self.m
+        m_val = self.m * lambda_val**2
+        dm_val = 2 * self.m * lambda_val
         return m_val, dm_val
     
     def hstar_func(self, t, state):
@@ -528,18 +538,18 @@ class SafeControl(Node):
 
         objective = cp.Minimize(cp.sum_squares(u))
 
-        J_cart = self.robot.jacobian(q)
-        tcp_pos = self.robot.kine_forward(q).t
-        ws = self.workspace_limits
-        dt = self.dt
+        #J_cart = self.robot.jacobian(q)
+        #tcp_pos = self.robot.kine_forward(q).t
+        #ws = self.workspace_limits
+        #dt = self.dt
 
         constraints = [
             A @ u <= b,                                             # PCBF constraint
-            J_cart[0, :] @ (u + u_nom) <= (ws['x_max'] - tcp_pos[0]) / dt,    # x max workspace limit
-            -J_cart[0, :] @ (u + u_nom) <= (tcp_pos[0] - ws['x_min']) / dt,   # x min workspace limit
-            J_cart[1, :] @ (u + u_nom) <= (ws['y_max'] - tcp_pos[1]) / dt,    # y max workspace limit
-            -J_cart[1, :] @ (u + u_nom) <= (tcp_pos[1] - ws['y_min']) / dt,   # y min workspace limit
-            -J_cart[2, :] @ (u + u_nom) <= (tcp_pos[2] - ws['z_min']) / dt,   # z min workspace limit
+            #J_cart[0, :] @ (u + u_nom) <= (ws['x_max'] - tcp_pos[0]) / dt,    # x max workspace limit
+            #-J_cart[0, :] @ (u + u_nom) <= (tcp_pos[0] - ws['x_min']) / dt,   # x min workspace limit
+            #J_cart[1, :] @ (u + u_nom) <= (ws['y_max'] - tcp_pos[1]) / dt,    # y max workspace limit
+            #-J_cart[1, :] @ (u + u_nom) <= (tcp_pos[1] - ws['y_min']) / dt,   # y min workspace limit
+            #-J_cart[2, :] @ (u + u_nom) <= (tcp_pos[2] - ws['z_min']) / dt,   # z min workspace limit
             ]
         
         problem = cp.Problem(objective, constraints)
@@ -576,10 +586,7 @@ class SafeControl(Node):
         
         u = self.solve_qp(u_nom, state, A, b)
         
-        self.u_actuals.append(u)
-        self.u_nominals.append(u_nom)
         self.h_star.append(H)
-        self.h_now.append(h_val)
 
         return u
     
@@ -590,6 +597,10 @@ class SafeControl(Node):
         """
         u_nom = self.mu_func(state)
         if self.current_hand_pos is None:
+            self.u_actuals.append(u_nom)
+            self.u_nominals.append(u_nom)
+            self.h_now.append(-100)
+            self.h_star.append(-100)
             return u_nom
             
         h_val, grad_h_q = self.h_func_with_gradient(t, state)
@@ -601,7 +612,6 @@ class SafeControl(Node):
         
         self.u_actuals.append(u)
         self.u_nominals.append(u_nom)
-        self.h_star.append(0)
         self.h_now.append(h_val)
         
         return u  
@@ -615,8 +625,8 @@ def main():
 
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
+    except (KeyboardInterrupt, ValueError):
+        node.save_data()
     finally:
         node.destroy_node()
         

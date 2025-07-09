@@ -53,6 +53,7 @@ class BaseRobot():
             self.update_status()
             self.power_on()
             self.enable_robot()
+            self.power_on_gripper()
         except KeyboardInterrupt:
             pass
 
@@ -62,6 +63,7 @@ class BaseRobot():
             #self.disable_robot()
             #self.power_off()
             #self.logout()
+            #self.power_off_gripper()
         except KeyboardInterrupt:
             pass
 

@@ -42,14 +42,21 @@ class LeapVisualizer(Node):
             # TODO make a trail of every future position
             forecasting_data = json.loads(msg.data)
             future_position = forecasting_data.get('future_position', [])
+            future_traj = forecasting_data.get('future_trajectory', [])
             
             if not future_position:
                 self.clear_markers(self.fmarker_publisher)
                 return  
 
             marker_array = MarkerArray()
-
+            
             marker_id = 0
+            if future_traj:
+                for f in future_traj:
+                    self.add_marker(marker_array, marker_id, f  , "forecast", "", scale=0.025, rgb=[1,0,0])
+                    marker_id += 1
+                
+
             self.add_marker(marker_array, marker_id, future_position  , "forecast", "", scale=0.05, rgb=[1,0,0])
 
             self.fmarker_publisher.publish(marker_array)
