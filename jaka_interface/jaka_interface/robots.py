@@ -3847,20 +3847,20 @@ class SimulatedRobot(BaseRobot):
         return SUCCESSFUL_RET
     
     def _open_gripper(self)->None:
-        ret = self.set_digital_output(self.gripper_control_pin, False)
+        ret = self._set_digital_output(self.gripper_control_pin, 0)
         time.sleep(self.gripper_timeout)
         return ret
 
     def _close_gripper(self)->None:
-        ret = self.set_digital_output(self.gripper_control_pin, True)
+        ret = self._set_digital_output(self.gripper_control_pin, 1)
         time.sleep(self.gripper_timeout)
         return ret
     
     def _power_off_gripper(self)->None: 
-        return self.set_digital_output(self.gripper_control_pin, True)
+        return self._set_digital_output(self.gripper_control_pin, 1)
 
     def _power_on_gripper(self)->None:
-        return self.set_digital_output(self.gripper_control_pin, False)
+        return self._set_digital_output(self.gripper_control_pin, 0)
 
     #########################################
     #                                       #
@@ -3953,16 +3953,16 @@ class SimulatedRobot(BaseRobot):
 
     def _kine_inverse(self, ref_pos: list, cartesian_pose: list)->list:
         if ref_pos is None:
-            ref_pos = self.get_joint_position()
+            ref_pos = self._get_joint_position()
         ret = self.chain.ik_LM(jaka_to_se3(cartesian_pose), q0=ref_pos)
         return ((JAKA_ERR_CODES.ERR_KINE_INVERSE_ERR.value,) if not ret[1] else (JAKA_ERR_CODES.SUCCESS_CODE.value, ret[0]))
 
-    def _kine_forward(self, joint_pos: list)->list:
+    def _kine_forward(self, joint_pos: list)->SE3:
         return (JAKA_ERR_CODES.SUCCESS_CODE.value, self.chain.fkine(joint_pos))
    
     def jacobian(self, joint_position: list=None)->np.ndarray:
         if joint_position is None: # Wanting the Jacobian at the current state might be implied
-            joint_position = self.get_joint_position()
+            joint_position = self._get_joint_position()
         return self.chain.jacob0(joint_position)
     
     #########################################
@@ -3977,7 +3977,7 @@ class SimulatedRobot(BaseRobot):
             self.joint_position = joint_pos
         elif move_mode == MoveMode.INCREMENTAL:
             self.joint_position += joint_pos
-        
+            
         self.tcp_position = se3_to_jaka(self.kine_forward(self.joint_position))
             
         time.sleep(self.servo_block_time)
@@ -3991,6 +3991,6 @@ class SimulatedRobot(BaseRobot):
             target_tcp = cartesian_pose
         elif move_mode == MoveMode.INCREMENTAL:
             target_tcp = curr_tcp + cartesian_pose
-        target_joint = self.kine_inverse(self.joint_position, target_tcp)
+        target_joint = self._kine_inverse(self.joint_position, target_tcp)
 
-        return self.servo_j(target_joint, MoveMode.ABSOLUTE)
+        return self._servo_j(target_joint, MoveMode.ABSOLUTE)

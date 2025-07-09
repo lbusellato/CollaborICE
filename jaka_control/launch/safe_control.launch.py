@@ -21,6 +21,8 @@ def generate_launch_description():
         'simulated_robot', default_value='False', description='Simulate the robot')
     forecasting_method_arg = DeclareLaunchArgument(
         'forecasting_method', default_value='nn', description='Forecasting method')
+    fake_data_arg = DeclareLaunchArgument(
+        'fake_data', default_value='False', description='Fake leap streamer')
     
     # Get package directory
     jaka_description = get_package_share_directory('jaka_description')
@@ -81,6 +83,7 @@ def generate_launch_description():
         }.items(),
         ) 
     
+    fake_data = LaunchConfiguration("fake_data")
     nn_node = Node(
         package='forecasting',
         executable='nn_node',
@@ -88,7 +91,9 @@ def generate_launch_description():
             PythonExpression([
                 "'",
                 forecasting_method,
-                "' == 'nn'",
+                "' == 'nn' and ",
+                fake_data,
+                " == False"
             ])),
         output='screen',
         emulate_tty=True
@@ -100,7 +105,9 @@ def generate_launch_description():
             PythonExpression([
                 "'",
                 forecasting_method,
-                "' == 'linear'",
+                "' == 'linear' and ",
+                fake_data,
+                " == False"
             ])),
         output='screen',
         emulate_tty=True
@@ -112,7 +119,9 @@ def generate_launch_description():
             PythonExpression([
                 "'",
                 forecasting_method,
-                "' == 'particle'",
+                "' == 'particle' and ",
+                fake_data,
+                " == False"
             ])),
         output='screen',
         emulate_tty=True
@@ -124,7 +133,9 @@ def generate_launch_description():
             PythonExpression([
                 "'",    
                 forecasting_method,
-                "' == 'kalman'",
+                "' == 'kalman' and ",
+                fake_data,
+                " == False"
             ])),
         output='screen',
         emulate_tty=True
@@ -132,6 +143,7 @@ def generate_launch_description():
 
     return launch.LaunchDescription([
         frame_id_arg,
+        fake_data_arg,
         publish_rate_arg,
         tracking_mode_arg,
         cbf_arch_arg,
