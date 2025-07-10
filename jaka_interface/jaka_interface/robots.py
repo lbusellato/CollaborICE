@@ -46,7 +46,7 @@ class BaseRobot():
         if cls.__doc__ is None:
             cls.__doc__ = BaseRobot.__doc__
 
-    def initialize(self):
+    def initialize(self, collision_recover: bool=False):
         try:
             self.login()
             # Get the initial status
@@ -54,6 +54,10 @@ class BaseRobot():
             self.power_on()
             self.enable_robot()
             self.power_on_gripper()
+
+            if collision_recover and self.get_robot_status()[5]:
+                self.collision_recover()
+
         except KeyboardInterrupt:
             pass
 
@@ -2949,7 +2953,6 @@ class RealRobot(BaseRobot):
         """
         return self.robot.is_in_collision()
         
-    @untested
     def _collision_recover(self)->None:
         """Recover from a collision state.
         """

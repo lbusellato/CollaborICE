@@ -23,6 +23,8 @@ def generate_launch_description():
         'forecasting_method', default_value='nn', description='Forecasting method')
     fake_data_arg = DeclareLaunchArgument(
         'fake_data', default_value='False', description='Fake leap streamer')
+    moving_arg = DeclareLaunchArgument(
+        'moving', default_value='True', description='Move the robot')
     
     # Get package directory
     jaka_description = get_package_share_directory('jaka_description')
@@ -45,11 +47,13 @@ def generate_launch_description():
     # Launch the JAKA Safe Control node
     simulated_robot = LaunchConfiguration("simulated_robot")
     forecasting_method = LaunchConfiguration("forecasting_method")
+    moving = LaunchConfiguration("moving")
     jaka_safe_control_node = Node(
         package='jaka_control',
         executable='safe_control',
         parameters=[{'simulated_robot': simulated_robot,
-                     'forecasting_method' : forecasting_method}],
+                     'forecasting_method' : forecasting_method,
+                     'moving' : moving}],
         output='screen',
         emulate_tty=True
     )
@@ -144,6 +148,7 @@ def generate_launch_description():
     return launch.LaunchDescription([
         frame_id_arg,
         fake_data_arg,
+        moving_arg,
         publish_rate_arg,
         tracking_mode_arg,
         cbf_arch_arg,

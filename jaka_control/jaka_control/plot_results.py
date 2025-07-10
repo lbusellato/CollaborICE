@@ -5,7 +5,7 @@ import matplotlib
 font = {'size'   : 22}
 matplotlib.rc('font', **font)
 
-csv_filename = f"/home/jaka/ros2_ws/recordings/run_particle_2025-07-03 11:34.csv"
+csv_filename = f"/home/jaka/ros2_ws/recordings/run_2025-07-10 14:04_kalman_data_m0.1_a150_l150"
 
 with open(csv_filename, 'r') as f:
     reader = csv.reader(f)
