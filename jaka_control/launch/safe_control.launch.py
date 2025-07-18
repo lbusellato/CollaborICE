@@ -89,8 +89,8 @@ def generate_launch_description():
     
     fake_data = LaunchConfiguration("fake_data")
     nn_node = Node(
-        package='forecasting',
-        executable='nn_node',
+        package='collaborice_forecasting_node',
+        executable='prob_node',
         condition=IfCondition(
             PythonExpression([
                 "'",
@@ -102,6 +102,20 @@ def generate_launch_description():
         output='screen',
         emulate_tty=True
     )
+    #nn_node = Node(
+    #    package='forecasting',
+    #    executable='nn_node',
+    #    condition=IfCondition(
+    #        PythonExpression([
+    #            "'",
+    #            forecasting_method,
+    #            "' == 'nn' and ",
+    #            fake_data,
+    #            " == False"
+    #        ])),
+    #    output='screen',
+    #    emulate_tty=True
+    #)
     linear_node = Node(
         package='forecasting',
         executable='linear_node',

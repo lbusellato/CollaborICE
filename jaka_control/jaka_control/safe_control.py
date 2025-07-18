@@ -6,6 +6,7 @@ np.random.seed(420)
 import cvxpy as cp
 import json
 import rclpy
+import matplotlib.pyplot as plt
 
 from datetime import datetime
 from geometry_msgs.msg import Point, Quaternion
@@ -58,6 +59,7 @@ class SafeControl(Node):
         self.forecasting_method = self.get_parameter('forecasting_method').value
         self.forecast_sub = self.create_subscription(String, '/applications/hand_forecasting', self.forecast_callback, 1)
         self.hand_forecast = [self.current_hand_pos]
+        self.forecast_cov = [np.zeros((3,3))]
 
         # Robot bounding boxes
         self.bb_pub = self.create_publisher(Marker, '/jaka/bounding_boxes', 1)
@@ -98,8 +100,8 @@ class SafeControl(Node):
             'y_min': -0.5, 'y_max': 0.8, # don't hit the milling
             'z_min':  0.1           # don't go below table height
         }
-        self.slack_penalty = 100
-        self.sigma_penalty = 1
+        self.slack_penalty = np.array([100, 100])
+        self.gamma = 0.
 
         if self.get_parameter('simulated_robot').value == True:
             self.home = np.array([-0.400, 0.500, 0.300, -np.pi, 0, 70*np.pi/180])
@@ -115,7 +117,7 @@ class SafeControl(Node):
 
         self.tcp_target = self.trajT
         self.q_target = self.robot.get_joint_position()
-        self.pos_tolerance = 3e-3
+        self.pos_tolerance = 5e-3
         self.rot_tolerance = 1e-2
         self.KP_pos = 1  # position gain
         self.rot_gain = 1  # orientation gain
@@ -135,12 +137,15 @@ class SafeControl(Node):
         self.future_hand_positions = []
         self.u_nominals = []
         self.u_actuals = []   
-        self.deltas = []     
+        self.deltas = []   
+        self.applied_std = []  
 
         self.control_loop_timer = self.create_timer(1.0/60, self.control_loop) 
         self.homed = False
 
+        self.half_runs = 0 # TODO wtf
         self.runs = 0
+        self.max_runs = 5
 
         self.u_smooth = 0.5
         self.prev_u = np.zeros(6)
@@ -152,9 +157,23 @@ class SafeControl(Node):
         msg.position = self.robot.get_joint_position()
         self.joint_state_publisher.publish(msg)
 
-    def save_data(self):
+    def reset_data(self):
+        self.record_leap = []
+        self.record_forecast = []
+        self.h_star = []
+        self.h_now = []
+        self.joint_positions = []
+        self.tcp_positions = []
+        self.hand_positions = []
+        self.future_hand_positions = []
+        self.u_nominals = []
+        self.u_actuals = []   
+        self.deltas = []   
+        self.applied_std = []  
+
+    def save_data(self, append=""):
         timestamp = datetime.now().strftime("%Y-%m-%d %H.%M")
-        filename_data = f"{timestamp}_{self.forecasting_method}_data_m{self.m}_a{self.alpha}_l{self.lamda}"
+        filename_data = f"{append}_{timestamp}_{self.forecasting_method}_data_m{self.m}_a{self.alpha}_l{self.lamda}_gamma{self.gamma}"
         leap_record_filename = f"./recordings/leap_{filename_data}.csv"
         forecast_record_filename = f"./recordings/forecast_{filename_data}.csv"
         #np.save(leap_record_filename, self.record_leap)
@@ -164,47 +183,50 @@ class SafeControl(Node):
         header = ['t', 
                   'h_star', 
                   'h_now', 
-                  'delta_cbf', 'delta_pcbf',
+                  'delta_cbf', 'delta_pcbf', 'applied_std',
                   'q0', 'q1', 'q2', 'q3', 'q4', 'q5', 
                   'tcp_x', 'tcp_y', 'tcp_z', 'tcp_rx', 'tcp_ry', 'tcp_rz', 
                   'curr_hand_x', 'curr_hand_y', 'curr_hand_z', 
                   'future_hand_x', 'future_hand_y', 'future_hand_z', 
                   'u0_nominal', 'u1_nominal', 'u2_nominal', 'u3_nominal', 'u4_nominal', 'u5_nominal', 
                   'u0_actual', 'u1_actual', 'u2_actual', 'u3_actual', 'u4_actual', 'u5_actual']
-        with open(csv_filename, mode='w', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow(header)
-            for i in range(len(self.h_star) - 1): # FIXME why different lens?
-                q0, q1, q2, q3, q4, q5 = self.joint_positions[i]
-                tcp_x, tcp_y, tcp_z, tcp_rx, tcp_ry, tcp_rz = self.tcp_positions[i]
-                if self.hand_positions[i] is not None:
-                    curr_hand_x, curr_hand_y, curr_hand_z = self.hand_positions[i]
-                else:
-                    curr_hand_x, curr_hand_y, curr_hand_z = np.zeros(3)
-                if self.future_hand_positions[i] is not None:
-                    future_hand_x, future_hand_y, future_hand_z = self.future_hand_positions[i]
-                else:
-                    future_hand_x, future_hand_y, future_hand_z = np.zeros(3)
-                u0_n, u1_n, u2_n, u3_n, u4_n, u5_n = self.u_nominals[i]
-                u0_a, u1_a, u2_a, u3_a, u4_a, u5_a = self.u_actuals[i]
+        if self.h_star:
+            with open(csv_filename, mode='w', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow(header)
+                for i in range(len(self.h_star) - 1): # FIXME why different lens?
+                    q0, q1, q2, q3, q4, q5 = self.joint_positions[i]
+                    tcp_x, tcp_y, tcp_z, tcp_rx, tcp_ry, tcp_rz = self.tcp_positions[i]
+                    if self.hand_positions[i] is not None:
+                        curr_hand_x, curr_hand_y, curr_hand_z = self.hand_positions[i]
+                    else:
+                        curr_hand_x, curr_hand_y, curr_hand_z = np.zeros(3)
+                    if self.future_hand_positions[i] is not None:
+                        future_hand_x, future_hand_y, future_hand_z = self.future_hand_positions[i]
+                    else:
+                        future_hand_x, future_hand_y, future_hand_z = np.zeros(3)
+                    u0_n, u1_n, u2_n, u3_n, u4_n, u5_n = self.u_nominals[i]
+                    u0_a, u1_a, u2_a, u3_a, u4_a, u5_a = self.u_actuals[i]
 
-                writer.writerow([self.dt * i, 
-                                 self.h_star[i], 
-                                 self.h_now[i], 
-                                 self.deltas[i][0], self.deltas[i][1],
-                                 q0, q1, q2, q3, q4, q5, 
-                                 tcp_x, tcp_y, tcp_z, tcp_rx, tcp_ry, tcp_rz, 
-                                 curr_hand_x, curr_hand_y, curr_hand_z, 
-                                 future_hand_x, future_hand_y, future_hand_z, 
-                                 u0_n, u1_n, u2_n, u3_n, u4_n, u5_n, 
-                                 u0_a, u1_a, u2_a, u3_a, u4_a, u5_a])
+                    writer.writerow([self.dt * i, 
+                                    self.h_star[i], 
+                                    self.h_now[i], 
+                                    self.deltas[i][0], self.deltas[i][1], self.applied_std[i],
+                                    q0, q1, q2, q3, q4, q5, 
+                                    tcp_x, tcp_y, tcp_z, tcp_rx, tcp_ry, tcp_rz, 
+                                    curr_hand_x, curr_hand_y, curr_hand_z, 
+                                    future_hand_x, future_hand_y, future_hand_z, 
+                                    u0_n, u1_n, u2_n, u3_n, u4_n, u5_n, 
+                                    u0_a, u1_a, u2_a, u3_a, u4_a, u5_a])
+        #plt.plot(self.applied_std)
+        #plt.show()
         self.robot.shutdown()
 
-    def control_loop(self):  
-
+    def control_loop(self): 
+            
         if self.moving:
             if not self.homed:
-                #self.robot.open_gripper()
+                self.robot.open_gripper()
                 self.robot.disable_servo_mode()
                 #self.robot.linear_move(self.approachS, MoveMode.ABSOLUTE, 250, True)
                 #self.robot.linear_move(self.pickS, MoveMode.ABSOLUTE, 250, True)
@@ -256,8 +278,10 @@ class SafeControl(Node):
                 self.bb_pub.publish(self.bb_marker)
 
             if not self.converged:
-                #u = self.calculate_u_uapcbf(self.t, current_state)
-                u = self.calculate_u_cbf(self.t, current_state)
+                u = self.calculate_u_uapcbf(self.t, current_state)
+                #u = self.calculate_u_pcbf(self.t, current_state)
+                #u = self.calculate_u_cbf(self.t, current_state)
+                #u = self.calculate_u_nominal(self.t, current_state)
 
                 u = self.u_smooth * u + (1 - self.u_smooth) * self.prev_u
                 self.prev_u = u
@@ -278,18 +302,23 @@ class SafeControl(Node):
                 tcp_pose[2] /= 1000
                 self.tcp_positions.append(tcp_pose)
 
-                self.converged = np.allclose(tcp_pose[:3], self.tcp_target[:3], atol=self.pos_tolerance)
+                self.converged = np.allclose(tcp_pose[:3], self.tcp_target[:3], atol=self.pos_tolerance) or np.max(np.abs(u)) < 1e-1
 
             else:
-                if self.runs % 2 == 0:
+                if self.half_runs % 2 == 0:
                     self.tcp_target = self.trajS
                 else:
                     self.tcp_target = self.trajT
                 self.converged = False
-                self.runs += 1
-                if self.runs >= 2:
-                    self.loginfo("Done.")
-                    self.control_loop_timer.cancel()
+                self.half_runs += 1
+                if self.half_runs % 2 == 0:
+                    self.runs += 1
+                    self.loginfo(f"Saving run {self.runs}")
+                    self.save_data(self.runs)
+                    self.reset_data()
+                    self.half_runs = 0
+                    if self.runs == 5:
+                        self.control_loop_timer.cancel()
                 #if not self.handover:
                 #    self.converged = False
                 #    self.tcp_target = self.trajT
@@ -324,6 +353,9 @@ class SafeControl(Node):
         forecast = [leap_to_jaka(f)/1000 for f in forecast]
         forecast = [self.current_hand_pos] + forecast
         self.hand_forecast = forecast
+        R = np.array([[0,-1,0], [0,0,1], [-1,0,0]])
+        stds = [R.T @ np.diag(std) @ R for std in msg.get('uncertainty')]
+        self.forecast_cov = [[[0, 0, 0], [0, 0, 0], [0, 0, 0]]] + stds
 
     def get_updated_obstacle(self, t):
         u = (t - self.t) / self.T        
@@ -331,11 +363,11 @@ class SafeControl(Node):
         idx = int(np.floor(u * (n - 1)))
         idx = max(0, min(idx, n - 1))
         obstacle_pos = self.hand_forecast[idx]
-        obstacle_radius = self.current_hand_radius
+        obstacle_cov = self.forecast_cov[idx]
         
-        return obstacle_pos, obstacle_radius    
+        return obstacle_pos, obstacle_cov    
 
-    def h_func(self, t, state):
+    def h_func(self, t, state, return_cov=False):
         
         r_cyl = 0.045  # cylinder radius [m]
         h_cyl = 0.35   # cylinder height [m]
@@ -349,7 +381,7 @@ class SafeControl(Node):
         cyl_top = tcp_pos - h_cyl * tcp_z_axis
 
         # Obstacle position and radius at time t in [tau, tau + T]
-        obstacle_pos, obstacle_radius = self.get_updated_obstacle(t)
+        obstacle_pos, obstacle_cov = self.get_updated_obstacle(t)
 
         # Project obstacle onto cylinder axis
         axis_vec = cyl_top - tcp_pos
@@ -365,15 +397,21 @@ class SafeControl(Node):
         min_vec_unit = min_vec / min_dist
 
         # Uncertainty handling: project sigma onto the direction from obstacle to tcp, use that as dynamic, uncertain margin
-        sigma = np.array([0, 0, 0]) #TODO get it from forecasting
-        sigma_dir = np.sqrt(np.sum((min_vec_unit**2) * (sigma**2)))
+        sigma_dir = np.clip(self.gamma * min_vec_unit.T @ obstacle_cov @ min_vec_unit, 0, self.min_safety_distance)
+
+        self.slack_penalty[0] = 100 * (1 - sigma_dir / self.min_safety_distance)
+        #sigma_dir = 0
+
 
         # Distance from obstacle to closest surface point on the cylinder
         dist_to_cylinder_surface = min_dist - r_cyl
 
         # Safety margin
         # obstacle_radius is already contained in min_dist!!!!
-        return (self.min_safety_distance + self.sigma_penalty * sigma_dir) - dist_to_cylinder_surface
+        if return_cov:
+            return (self.min_safety_distance + sigma_dir) - dist_to_cylinder_surface, sigma_dir
+        else:
+            return (self.min_safety_distance + sigma_dir) - dist_to_cylinder_surface
     
     def h_func_with_gradient(self, t, state):
         """Numerically computes the gradient of h with respect to the state q."""
@@ -497,6 +535,9 @@ class SafeControl(Node):
                 # Switch to M1star when the derivative gets too large
                 dR_dx = dM1star_dx
 
+        _, cov = self.h_func(R, state, True)
+        self.applied_std.append(cov)
+
         m, dm = self.m_func(R - t)
 
         hstar = h_of_M1star - m
@@ -598,7 +639,8 @@ class SafeControl(Node):
 
         delta = cp.Variable(2, nonneg=True) 
 
-        objective = cp.Minimize(cp.sum_squares(u) + self.slack_penalty*cp.sum_squares(delta))
+        #objective = cp.Minimize(cp.sum_squares(u) + self.slack_penalty*cp.sum_squares(delta))
+        objective = cp.Minimize(cp.sum_squares(u) + cp.sum_squares(self.slack_penalty@delta))
 
         constraints = []
         for A, b, d in zip(As, bs, delta):
@@ -630,6 +672,7 @@ class SafeControl(Node):
             self.h_star.append(-100)
             self.h_now.append(-100)
             self.deltas.append([0,0])
+            self.applied_std.append(0)
             return u_nom
         
         # PCBF
@@ -653,13 +696,19 @@ class SafeControl(Node):
 
         return u
 
-    def calculate_u_pcbf(self, t, state, u_nom):
+    def calculate_u_pcbf(self, t, state):
         """
         Calculates the safe velocity command using a QP with the predictive CBF constraint.
         The constraint is: dhstar_dt + dhstar_du·u + α·hstar ≥ 0.
         """
-        #u_nom = self.mu_func(state)
+        u_nom = self.mu_func(state)
         if self.current_hand_pos is None:
+            self.u_actuals.append(u_nom)
+            self.u_nominals.append(u_nom)
+            self.h_now.append(-100)
+            self.h_star.append(-100)
+            self.deltas.append([0,0])
+            self.applied_std.append(0)
             return u_nom
         
         H, dHdt, dHdu = self.hstar_func(t, state)
@@ -670,8 +719,12 @@ class SafeControl(Node):
         
         u = self.solve_qp(u_nom, state, A, b)
         
+        self.u_actuals.append(u)
+        self.u_nominals.append(u_nom)
+        self.h_now.append(h_val)
         self.h_star.append(H)
-
+        self.deltas.append([0,0])
+        
         return u
     
     def calculate_u_cbf(self, t, state):
@@ -686,6 +739,7 @@ class SafeControl(Node):
             self.h_now.append(-100)
             self.h_star.append(-100)
             self.deltas.append([0,0])
+            self.applied_std.append(0)
             return u_nom
             
         h_val, grad_h_q = self.h_func_with_gradient(t, state)
@@ -698,8 +752,20 @@ class SafeControl(Node):
         self.u_actuals.append(u)
         self.u_nominals.append(u_nom)
         self.h_now.append(h_val)
+        self.h_star.append(-100)
+        self.deltas.append([0,0])
         
         return u  
+    
+    def calculate_u_nominal(self, t, state):
+        u_nom = self.mu_func(state)
+        self.u_actuals.append(u_nom)
+        self.u_nominals.append(u_nom)
+        self.h_now.append(-100)
+        self.h_star.append(-100)
+        self.deltas.append([0,0])
+        self.applied_std.append(0)
+        return u_nom
     
     def loginfo(self, msg):
         self.logger.info(str(msg))
