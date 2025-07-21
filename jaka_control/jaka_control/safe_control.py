@@ -26,10 +26,10 @@ from visualization_msgs.msg import Marker
 class SafeControl(Node):
     def __init__(self):
         super().__init__('jaka_control')
-
+        
         self.logger = self.get_logger()
 
-        self.declare_parameter('moving', False)
+        self.declare_parameter('moving', True)
         self.moving = self.get_parameter('moving').value
 
         # Init robot interface
@@ -53,7 +53,7 @@ class SafeControl(Node):
         # Hand position and forecast
         self.hand_pos_sub = self.create_subscription(String, '/leap/fusion', self.leap_fusion_callback, 1)
         self.current_hand_pos = None
-        self.current_hand_radius = 0.1
+        self.current_hand_radius = 0.05
 
         self.declare_parameter('forecasting_method', 'nn')
         self.forecasting_method = self.get_parameter('forecasting_method').value
@@ -87,7 +87,7 @@ class SafeControl(Node):
 
         self.T = 1  # Prediction horizon
         self.min_safety_distance = 0.15
-        self.h_max_estimate = self.current_hand_radius + self.min_safety_distance # Derived from h_func definition
+        #self.h_max_estimate = self.current_hand_radius + self.min_safety_distance # Derived from h_func definition
         self.m = 1# np.round(self.h_max_estimate / self.T**2, 2) # Barrier function parameter
         self.perturb_delta = 1e-4  # For numerical gradient computation
         self.alpha = 125
@@ -101,13 +101,14 @@ class SafeControl(Node):
             'z_min':  0.1           # don't go below table height
         }
         self.slack_penalty = np.array([100, 100])
-        self.gamma = 0.
+        self.gamma = 5
 
         if self.get_parameter('simulated_robot').value == True:
             self.home = np.array([-0.400, 0.500, 0.300, -np.pi, 0, 70*np.pi/180])
         else:
             self.home = np.array([-215, -409, 300, -np.pi, 0, 70*np.pi/180])
 
+        self.joint_home = np.array([2.8651701670623897, 1.205664146851847, -1.2036138701180468, 1.5687460232699513, -4.712388900003348, 0.8580415406663497])
             
         self.approachS = np.array([-215, -409, 300, -np.pi, 0, 70*np.pi/180])
         self.pickS = np.array([-215, -409, -20, -np.pi, 0, 70*np.pi/180])
@@ -126,7 +127,9 @@ class SafeControl(Node):
 
         self.t = 0
         self.dt = 0.008
-    
+
+        self.start_time = 0
+        self.time = []
         self.record_leap = []
         self.record_forecast = []
         self.h_star = []
@@ -145,10 +148,13 @@ class SafeControl(Node):
 
         self.half_runs = 0 # TODO wtf
         self.runs = 0
-        self.max_runs = 5
+        self.max_runs = 3
 
         self.u_smooth = 0.5
         self.prev_u = np.zeros(6)
+        
+        self.collision_detected = False
+        self.collision_check_iter = 0
 
     def joint_state_publisher_callback(self):
         msg = JointState()
@@ -172,7 +178,7 @@ class SafeControl(Node):
         self.applied_std = []  
 
     def save_data(self, append=""):
-        timestamp = datetime.now().strftime("%Y-%m-%d %H.%M")
+        timestamp = datetime.now().strftime("%Y-%m-%d %H.%M.%S")
         filename_data = f"{append}_{timestamp}_{self.forecasting_method}_data_m{self.m}_a{self.alpha}_l{self.lamda}_gamma{self.gamma}"
         leap_record_filename = f"./recordings/leap_{filename_data}.csv"
         forecast_record_filename = f"./recordings/forecast_{filename_data}.csv"
@@ -180,6 +186,9 @@ class SafeControl(Node):
         #np.save(forecast_record_filename, self.record_forecast)
 
         csv_filename = f"./recordings/run_{filename_data}.csv"
+        if self.collision_detected:
+            csv_filename = f"./recordings/FAILED_run_{filename_data}.csv"
+            self.collision_detected = False
         header = ['t', 
                   'h_star', 
                   'h_now', 
@@ -208,7 +217,7 @@ class SafeControl(Node):
                     u0_n, u1_n, u2_n, u3_n, u4_n, u5_n = self.u_nominals[i]
                     u0_a, u1_a, u2_a, u3_a, u4_a, u5_a = self.u_actuals[i]
 
-                    writer.writerow([self.dt * i, 
+                    writer.writerow([np.round(self.time[i] * 1e-9, 3), 
                                     self.h_star[i], 
                                     self.h_now[i], 
                                     self.deltas[i][0], self.deltas[i][1], self.applied_std[i],
@@ -222,20 +231,26 @@ class SafeControl(Node):
         #plt.show()
         self.robot.shutdown()
 
+    def homing(self):
+        self.robot.open_gripper()
+        self.robot.disable_servo_mode()
+        #self.robot.linear_move(self.approachS, MoveMode.ABSOLUTE, 250, True)
+        #self.robot.linear_move(self.pickS, MoveMode.ABSOLUTE, 250, True)
+        #self.robot.close_gripper()
+        #self.robot.linear_move(self.approachS, MoveMode.ABSOLUTE, 250, True)
+        #self.robot.linear_move(self.trajS_jaka, MoveMode.ABSOLUTE, 250, True)
+        self.robot.joint_move(self.joint_home, MoveMode.ABSOLUTE, speed=0.25, is_blocking=True)
+        self.robot.enable_servo_mode()
+        self.homed = True
+        self.q_target = self.robot.get_joint_position()
+        self.start_time = self.get_clock().now().nanoseconds
+
     def control_loop(self): 
             
         if self.moving:
-            if not self.homed:
-                self.robot.open_gripper()
-                self.robot.disable_servo_mode()
-                #self.robot.linear_move(self.approachS, MoveMode.ABSOLUTE, 250, True)
-                #self.robot.linear_move(self.pickS, MoveMode.ABSOLUTE, 250, True)
-                #self.robot.close_gripper()
-                #self.robot.linear_move(self.approachS, MoveMode.ABSOLUTE, 250, True)
-                self.robot.linear_move(self.trajS_jaka, MoveMode.ABSOLUTE, 250, True)
-                self.robot.enable_servo_mode()
-                self.homed = True
-                self.q_target = self.robot.get_joint_position()
+            if not self.homed:self.homing()
+            
+            self.time.append(self.get_clock().now().nanoseconds - self.start_time)
 
             if self.handover:
                 pass #self.tcp_target = self.trajT
@@ -277,6 +292,19 @@ class SafeControl(Node):
                 
                 self.bb_pub.publish(self.bb_marker)
 
+            #self.collision_check_iter += 1
+            #if self.collision_check_iter % 500 == 0:
+            #    try:
+            #        self.collision_detected = self.robot.get_robot_status()[5]
+            #    except Exception:
+            #        pass
+            #    if self.collision_detected:
+            #        self.loginfo(f"Collision detected, aborting run...")
+            #        self.robot.collision_recover()
+            #        self.homing()
+            #        self.converged = True
+            #        self.collision_detected = True
+
             if not self.converged:
                 u = self.calculate_u_uapcbf(self.t, current_state)
                 #u = self.calculate_u_pcbf(self.t, current_state)
@@ -317,7 +345,8 @@ class SafeControl(Node):
                     self.save_data(self.runs)
                     self.reset_data()
                     self.half_runs = 0
-                    if self.runs == 5:
+                    if self.runs == self.max_runs:
+                        self.loginfo("Trial completed")
                         self.control_loop_timer.cancel()
                 #if not self.handover:
                 #    self.converged = False
@@ -325,6 +354,7 @@ class SafeControl(Node):
                 #    self.handover = True
                 #else:
                 #    self.robot.open_gripper()
+                #    self.save_data()
                 #    self.control_loop_timer.cancel()
     
     def leap_fusion_callback(self, msg):
@@ -340,9 +370,9 @@ class SafeControl(Node):
                     elif h.get('hand_type')=='left':
                         hand = hands[0].get('hand_keypoints')
                         target_pos = leap_to_jaka(hand.get('palm_position'))/1000
-                        self.trajT[:3] = target_pos[:3]
-                        self.trajT[2] += 0.05
-                        self.pos_tolerance = 7e-3
+                        #self.trajT[:3] = target_pos[:3]
+                        #self.trajT[2] += 0.05
+                        #self.pos_tolerance = 7e-3
 
         self.hand_forecast[0] = self.current_hand_pos
 
@@ -724,6 +754,7 @@ class SafeControl(Node):
         self.h_now.append(h_val)
         self.h_star.append(H)
         self.deltas.append([0,0])
+        self.applied_std.append(0)
         
         return u
     
@@ -754,6 +785,7 @@ class SafeControl(Node):
         self.h_now.append(h_val)
         self.h_star.append(-100)
         self.deltas.append([0,0])
+        self.applied_std.append(0)
         
         return u  
     
@@ -773,16 +805,17 @@ class SafeControl(Node):
 def main():
     rclpy.init()
     node = SafeControl()
+    rclpy.spin(node)
 
-    try:
-        rclpy.spin(node)
-    except (Exception, KeyboardInterrupt, ValueError):
-        node.save_data()
-    finally:
-        node.destroy_node()
-        
-        if rclpy.ok():
-            rclpy.shutdown()
+    #try:
+    #    rclpy.spin(node)
+    #except (Exception, KeyboardInterrupt, ValueError):
+    #    node.save_data()
+    #finally:
+    #    node.destroy_node()
+    #    
+    #    if rclpy.ok():
+    #        rclpy.shutdown()
 
 
 if __name__=='__main__':
